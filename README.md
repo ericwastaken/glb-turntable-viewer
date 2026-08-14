@@ -37,7 +37,7 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 |---|---|
 | `index.html` | The whole page (markup, styles, and module script). |
 | `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment, self-hosted. |
-| `models/` | `DragonAttenuation.glb` and `DamagedHelmet.glb` from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets). |
+| `models/` | Sample models from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets): glass/transmission tests (DragonAttenuation, MosquitoInAmber, GlassVaseFlowers, GlassHurricaneCandleHolder, IridescentDishWithOlives, DispersionTest) plus DamagedHelmet (PBR). |
 
 ## Known limits (deliberate; it's a proof of concept)
 
