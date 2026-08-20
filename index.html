@@ -76,6 +76,7 @@
 <div id="hud">
   <select id="modelSelect" title="Pick a bundled model">
     <option value="models/DragonAttenuation.glb">Glass dragon (transmission)</option>
+    <option value="models/DragonAttenuation.glb" data-sidecar="sidecars/example-emerald-glass.json">Glass dragon + example sidecar (emerald)</option>
     <option value="models/MosquitoInAmber.glb">Mosquito in amber (deep glass volume)</option>
     <option value="models/GlassVaseFlowers.glb">Glass vase with flowers</option>
     <option value="models/GlassHurricaneCandleHolder.glb">Glass hurricane candle holder</option>
@@ -106,6 +107,7 @@
     <button id="applyBtn">Apply</button>
     <button id="clearBtn" title="Remove the sidecar entirely">Clear sidecar</button>
     <button id="closeBtn">Close</button>
+    <button id="docsBtn" title="MeshPhysicalMaterial property reference (opens a new window)">three.js docs ↗</button>
   </div>
 </div>
 
@@ -292,6 +294,16 @@ function setSidecar(spec, name) {
   if (editor.classList.contains('open')) openEditor();   // refresh editor view
 }
 
+async function loadSidecarURL(url) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const res = lintSidecar(await r.text());
+    setSidecar(res.spec ?? null, url.split('/').pop());
+    if (!res.ok) status.textContent = `Sidecar ${url} has errors — open Sidecar… to review.`;
+  } catch (err) { status.textContent = `Could not load sidecar ${url}: ${err.message}`; }
+}
+
 // --- sidecar linter -----------------------------------------------------------
 // Two layers: valid JSON, then valid-for-three.js (known MeshPhysicalMaterial
 // properties, right value types, mesh names that exist in the current model).
@@ -407,6 +419,8 @@ $('clearBtn').onclick = () => {
   $('sidecarNameEl').textContent = '· (new)';
   renderLint(lintSidecar(editorText.value));
 };
+$('docsBtn').onclick = () =>
+  window.open('https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial', '_blank', 'noopener');
 
 // --- model loading -----------------------------------------------------------
 function refreshStatus() {
@@ -452,7 +466,11 @@ let paused = false;
 pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; };
 
 const modelSelect = $('modelSelect');
-modelSelect.onchange = () => loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
+modelSelect.onchange = () => {
+  const opt = modelSelect.selectedOptions[0];
+  if (opt.dataset.sidecar) loadSidecarURL(opt.dataset.sidecar);
+  loadURL(opt.value, opt.textContent);
+};
 
 $('pivotSelect').onchange = () => applyPivot();
 $('ovToggle').onchange = e => applySidecar(e.target.checked);
@@ -508,15 +526,7 @@ addEventListener('drop', e => {
 // The sidecar is never assumed from the model name — it must be passed.
 (async () => {
   const sc = params.get('sidecar');
-  if (sc) {
-    try {
-      const r = await fetch(sc);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const res = lintSidecar(await r.text());
-      setSidecar(res.spec ?? null, sc.split('/').pop());
-      if (!res.ok) status.textContent = `Sidecar ${sc} has errors — open Sidecar… to review.`;
-    } catch (err) { status.textContent = `Could not load sidecar ${sc}: ${err.message}`; }
-  }
+  if (sc) await loadSidecarURL(sc);
   const qs = params.get('model');
   if (qs) {
     selectCustom(qs.split('/').pop(), 'URL', qs);

@@ -1,0 +1,23 @@
+{
+  "_comment": "Example sidecar: material settings applied on top of a model's exported materials. Pass it with ?sidecar=, multi-select it with a model in the file dialog, or drag-drop it. Property reference: threejs.org/docs -> MeshPhysicalMaterial.",
+  "materials": {
+    "_comment": "Keys are mesh names ('Dragon' below targets the bundled glass dragon); '*' is the fallback for every mesh without its own entry. Keys starting with underscore are comments.",
+    "Dragon": {
+      "color": "#7fe0b0",
+      "metalness": 0,
+      "roughness": 0.06,
+      "transmission": 0.95,
+      "thickness": 2.0,
+      "ior": 1.5,
+      "attenuationColor": "#118f5a",
+      "attenuationDistance": 1.6,
+      "clearcoat": 1.0,
+      "clearcoatRoughness": 0.1
+    },
+    "*": {
+      "color": "#ffb04d",
+      "metalness": 0.9,
+      "roughness": 0.25
+    }
+  }
+}

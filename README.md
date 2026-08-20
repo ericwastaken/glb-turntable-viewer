@@ -44,7 +44,14 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 - **Sidecar editor**: the "Sidecar…" button opens an in-page JSON editor with
   live linting — JSON validity plus three.js validity (known
   MeshPhysicalMaterial properties, value types, 0–1 ranges, and whether mesh
-  names exist in the current model). Apply is blocked while errors remain.
+  names exist in the current model). Apply is blocked while errors remain, and
+  a "three.js docs" button opens the MeshPhysicalMaterial reference.
+- **Bundled example**: the "Glass dragon + example sidecar (emerald)" dropdown
+  entry loads the dragon together with
+  [`sidecars/example-emerald-glass.json`](sidecars/example-emerald-glass.json),
+  so the same model can be viewed with and without sidecar settings via the
+  checkbox. The example also demonstrates per-mesh targeting (a named mesh
+  entry plus a `"*"` fallback).
 - **Lighting**: procedurally generated RoomEnvironment IBL + ACES tone
   mapping, which is what makes PBR/glass materials read correctly.
 - Backdrop/stage meshes bundled inside sample models (names matching
