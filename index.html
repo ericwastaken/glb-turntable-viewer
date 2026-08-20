@@ -67,7 +67,30 @@
   #lint .error { color: #ff7a90; }
   #lint .warn { color: #ffc978; }
   #lint .ok { color: #7ce0a3; }
-  #editorBtns { display: flex; gap: 8px; }
+  #editorBtns { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* --- narrow screens (phones): compact HUD + bottom-sheet editor ---------- */
+  @media (max-width: 640px) {
+    #hud { gap: 8px; padding: 8px; }
+    /* Model picker gets its own full-width row; the rest wrap beneath it. */
+    #modelSelect { flex: 1 1 100%; }
+    /* 16px inputs prevent iOS Safari's auto-zoom on focus; 40px+ = touchable. */
+    select, button, label.file { min-height: 40px; font-size: 16px; }
+    input[type="range"] { width: 80px; }
+
+    /* Editor becomes a bottom sheet: plays well with the on-screen keyboard
+       and leaves the model visible above. dvh tracks the browser's dynamic
+       toolbar; safe-area padding keeps buttons off the home indicator. */
+    #editor {
+      top: auto; left: 0; right: 0; bottom: 0;
+      width: auto; height: 70dvh;
+      border-radius: 14px 14px 0 0; border-bottom: none;
+      padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    }
+    #editorText { font-size: 16px; }
+    #editorBtns button { flex: 1; min-height: 44px; }
+    #status { bottom: calc(6px + env(safe-area-inset-bottom)); font-size: 11px; }
+  }
 </style>
 </head>
 <body>
