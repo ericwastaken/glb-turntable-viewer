@@ -31,6 +31,7 @@
   select:hover, button:hover, label.file:hover { border-color: #4257a0; }
   input[type="file"] { display: none; }
   input[type="range"] { accent-color: #5d79e6; width: 110px; }
+  input[type="checkbox"] { accent-color: #5d79e6; }
   .grp { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .9; }
 
   #status {
@@ -59,13 +60,22 @@
     <option value="models/DispersionTest.glb">Dispersion test (prism glass)</option>
     <option value="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
   </select>
-  <label class="file">Load .glb…<input type="file" id="filePick" accept=".glb,.gltf"></label>
+  <label class="file">Load .glb…<input type="file" id="filePick" accept=".glb,.gltf,.json"></label>
+  <span class="grp">Pivot
+    <select id="pivotSelect" title="Vertical axis the model spins around">
+      <option value="center">Center (bounding box)</option>
+      <option value="origin">As exported (model origin)</option>
+    </select>
+  </span>
   <span class="grp">Spin <input type="range" id="speed" min="0" max="3" step="0.05" value="0.3"></span>
   <button id="pauseBtn" title="Pause / resume spin">Pause</button>
+  <label class="grp" id="ovWrap" style="display:none" title="Toggle materials from the sidecar .overrides.json">
+    <input type="checkbox" id="ovToggle" checked> Local materials
+  </label>
 </div>
 
 <div id="status">Loading…</div>
-<div id="drop">Drop a .glb anywhere</div>
+<div id="drop">Drop a .glb (or a .overrides.json) anywhere</div>
 
 <script type="importmap">
 {
@@ -130,58 +140,156 @@ scene.add(key);
   scene.add(stars);
 }
 
-// --- model loading ---------------------------------------------------------
+// --- model + pivot ----------------------------------------------------------
+// The model is parented under a pivot group at the world origin. The spin is
+// applied to the pivot, so wherever we position the model inside it defines
+// the rotation axis. "Center" mode puts the vertical axis exactly through the
+// middle of the visible bounding box; "origin" keeps the axis where the file's
+// author put the model origin. ?pivot=x,y,z (model units) overrides both.
+const pivot = new THREE.Group();
+scene.add(pivot);
+
 const loader = new GLTFLoader();
 let current = null;      // THREE.Group holding the loaded model
 let mixer = null;        // plays animations embedded in the GLB, if any
+let baseLabel = '';
 
-function frameObject(obj) {
-  // Center the model and pull the camera back to fit it, whatever its size.
-  // Only count visible meshes (hidden backdrops would skew the framing).
+const params = new URLSearchParams(location.search);
+const pivotParam = (params.get('pivot') || '').split(',').map(Number);
+const manualPivot = pivotParam.length === 3 && pivotParam.every(Number.isFinite)
+  ? new THREE.Vector3(...pivotParam) : null;
+
+function chainVisible(o, root) {
+  for (let p = o; p; p = p.parent) { if (!p.visible) return false; if (p === root) break; }
+  return true;
+}
+
+function visibleBox(obj) {
   const box = new THREE.Box3();
   obj.updateWorldMatrix(true, true);
-  const chainVisible = o => { for (let p = o; p; p = p.parent) { if (!p.visible) return false; if (p === obj) break; } return true; };
   obj.traverse(o => {
-    if (o.isMesh && chainVisible(o)) box.union(new THREE.Box3().setFromObject(o));
+    if (o.isMesh && chainVisible(o, obj)) box.union(new THREE.Box3().setFromObject(o));
   });
   if (box.isEmpty()) box.setFromObject(obj);
+  return box;
+}
+
+function applyPivot() {
+  if (!current) return;
+  current.position.set(0, 0, 0);
+  const box = visibleBox(current);
+  const center = box.getCenter(new THREE.Vector3());
+  if (manualPivot) {
+    current.position.copy(manualPivot).negate();
+  } else if (document.getElementById('pivotSelect').value === 'center') {
+    current.position.copy(center).negate();   // spin axis through bbox center
+  } // 'origin': leave at 0,0,0 — spin around the authored origin
+  frameCamera();
+}
+
+function frameCamera() {
+  const box = visibleBox(pivot);
   const size = box.getSize(new THREE.Vector3()).length();
   const center = box.getCenter(new THREE.Vector3());
-  obj.position.sub(center);
   const dist = size * 1.95;  // start small: model ~35% of viewport height
-  camera.position.set(0, size * 0.15, dist);
+  camera.position.set(center.x, center.y + size * 0.15, center.z + dist);
   camera.near = size / 100; camera.far = size * 20;
   camera.updateProjectionMatrix();
-  controls.target.set(0, 0, 0);
+  controls.target.copy(center);
   controls.update();
 }
 
+// --- material overrides (sidecar file) --------------------------------------
+// Effects that don't survive a glTF export (e.g. glass/transmission looks) are
+// described in a sidecar JSON named "<model file>.overrides.json" sitting next
+// to the model. It is fetched automatically; if present, the "Local materials"
+// checkbox appears and toggles between the file's exported materials and the
+// override set. A .overrides.json can also be drag-dropped onto the page.
+// Schema: { "materials": { "<mesh name>" | "*": { MeshPhysicalMaterial props,
+// colors as hex strings } } }
+let overrideSpec = null;
+const originalMats = new Map();   // mesh -> material as exported
+const overrideMats = new Map();   // mesh -> override material
+
+const COLOR_PROPS = new Set(['color', 'attenuationColor', 'emissive', 'sheenColor', 'specularColor']);
+function buildMaterial(spec) {
+  const m = new THREE.MeshPhysicalMaterial();
+  for (const [k, v] of Object.entries(spec)) {
+    if (COLOR_PROPS.has(k)) m[k] = new THREE.Color(v);
+    else if (k in m) m[k] = v;
+  }
+  return m;
+}
+
+function prepareOverrides() {
+  overrideMats.clear();
+  if (!overrideSpec?.materials || !current) return;
+  current.traverse(o => {
+    if (!o.isMesh) return;
+    const spec = overrideSpec.materials[o.name] ?? overrideSpec.materials['*'];
+    if (spec) overrideMats.set(o, buildMaterial(spec));
+  });
+  const wrap = document.getElementById('ovWrap');
+  wrap.style.display = overrideMats.size ? 'flex' : 'none';
+  if (overrideMats.size) applyOverrides(document.getElementById('ovToggle').checked);
+}
+
+function applyOverrides(on) {
+  for (const [mesh, mat] of overrideMats) {
+    mesh.material = on ? mat : originalMats.get(mesh);
+  }
+  refreshStatus();
+}
+
+async function fetchOverrides(url) {
+  overrideSpec = null;
+  document.getElementById('ovWrap').style.display = 'none';
+  if (url.startsWith('blob:')) return;   // no sidecar next to a dropped file
+  try {
+    const r = await fetch(url + '.overrides.json');
+    if (r.ok) overrideSpec = await r.json();
+  } catch { /* no sidecar: fine */ }
+}
+
+// --- model loading -----------------------------------------------------------
+function refreshStatus() {
+  const anims = mixer ? mixer._actions.length : 0;
+  const ov = overrideMats.size
+    ? (document.getElementById('ovToggle').checked ? ' • local materials ON' : ' • local materials off (as exported)')
+    : '';
+  status.textContent = `${baseLabel} • drag to orbit, wheel/pinch to zoom` +
+    (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + ov;
+}
+
 function setModel(gltf, label) {
-  if (current) { scene.remove(current); current.traverse(o => { o.geometry?.dispose?.(); }); }
+  if (current) { pivot.remove(current); current.traverse(o => { o.geometry?.dispose?.(); }); }
   mixer = null;
+  originalMats.clear();
   current = gltf.scene;
-  // Hide backdrop/stage meshes some sample models ship with (e.g. the
-  // checkerboard "Cloth Backdrop" in DragonAttenuation) — we only want the hero.
+  // Hide backdrop/stage meshes some sample models ship with — we only want the hero.
   current.traverse(o => { if (/backdrop|stage|floor|ground/i.test(o.name)) o.visible = false; });
-  scene.add(current);
-  frameObject(current);
+  current.traverse(o => { if (o.isMesh) originalMats.set(o, o.material); });
+  pivot.add(current);
+  pivot.rotation.set(0, 0, 0);
+  applyPivot();
   if (gltf.animations?.length) {
     mixer = new THREE.AnimationMixer(current);
     gltf.animations.forEach(clip => mixer.clipAction(clip).play());
   }
-  const anims = gltf.animations?.length ?? 0;
-  status.textContent = `${label} • drag to orbit, wheel/pinch to zoom` +
-    (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)');
+  baseLabel = label;
+  prepareOverrides();
+  refreshStatus();
 }
 
-function loadURL(url, label) {
+async function loadURL(url, label) {
   status.textContent = `Loading ${label}…`;
+  await fetchOverrides(url);
   loader.load(url, g => setModel(g, label),
     xhr => { if (xhr.total) status.textContent = `Loading ${label}… ${Math.round(xhr.loaded / xhr.total * 100)}%`; },
     err => { status.textContent = `Failed to load ${label}: ${err.message ?? err}`; console.error(err); });
 }
 
-// --- UI --------------------------------------------------------------------
+// --- UI ----------------------------------------------------------------------
 const speedInput = document.getElementById('speed');
 const pauseBtn = document.getElementById('pauseBtn');
 let paused = false;
@@ -190,31 +298,39 @@ pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Re
 const modelSelect = document.getElementById('modelSelect');
 modelSelect.onchange = () => loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
 
-document.getElementById('filePick').onchange = e => {
-  const f = e.target.files[0];
-  if (f) loadURL(URL.createObjectURL(f), f.name);
-};
+document.getElementById('pivotSelect').onchange = () => applyPivot();
+document.getElementById('ovToggle').onchange = e => applyOverrides(e.target.checked);
 
-// Drag & drop a .glb from Finder.
+function handleFile(f) {
+  if (f.name.endsWith('.json')) {
+    f.text().then(t => { overrideSpec = JSON.parse(t); prepareOverrides(); refreshStatus(); })
+      .catch(err => { status.textContent = `Bad overrides JSON: ${err.message}`; });
+  } else {
+    loadURL(URL.createObjectURL(f), f.name);
+  }
+}
+document.getElementById('filePick').onchange = e => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+
+// Drag & drop a .glb (or a .overrides.json) from Finder.
 const drop = document.getElementById('drop');
 addEventListener('dragover', e => { e.preventDefault(); drop.style.display = 'flex'; });
 drop.addEventListener('dragleave', () => drop.style.display = 'none');
 addEventListener('drop', e => {
   e.preventDefault(); drop.style.display = 'none';
   const f = e.dataTransfer.files?.[0];
-  if (f) loadURL(URL.createObjectURL(f), f.name);
+  if (f) handleFile(f);
 });
 
 // ?model=path/to/file.glb overrides the default.
-const qs = new URLSearchParams(location.search).get('model');
+const qs = params.get('model');
 if (qs) loadURL(qs, qs.split('/').pop());
 else loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
 
-// --- render loop -----------------------------------------------------------
+// --- render loop ---------------------------------------------------------------
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
-  if (current && !paused) current.rotation.y += dt * parseFloat(speedInput.value);
+  if (current && !paused) pivot.rotation.y += dt * parseFloat(speedInput.value);
   mixer?.update(dt);
   controls.update();
   renderer.render(scene, camera);
@@ -227,7 +343,7 @@ addEventListener('resize', () => {
 });
 
 // Debug handle for console experiments (material tweaks, inspection).
-window.viewer = { THREE, scene, camera, renderer, get model() { return current; } };
+window.viewer = { THREE, scene, camera, renderer, pivot, get model() { return current; } };
 </script>
 </body>
 </html>

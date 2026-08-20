@@ -27,6 +27,17 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
   so no baked animation is needed for turntable moves. If a GLB does contain
   embedded animations, the page detects and plays them, and says so in the
   status line.
+- **Pivot selector**: choose the vertical axis the model spins around —
+  "Center" (through the middle of the visible bounding box, the default) or
+  "As exported" (the model file's own origin). A manual axis can be forced
+  with `?pivot=x,y,z` in model units.
+- **Local material overrides**: effects that don't survive a glTF export
+  (e.g. glass/transmission looks) can be described in a sidecar JSON named
+  `<model file>.overrides.json` next to the model. It loads automatically and
+  a "Local materials" checkbox appears, toggling between as-exported and
+  override materials. Schema: `{"materials": {"<mesh name>" or "*":
+  {MeshPhysicalMaterial props, colors as hex strings}}}`. A `.overrides.json`
+  can also be drag-dropped onto the page to apply to the current model.
 - **Lighting**: procedurally generated RoomEnvironment IBL + ACES tone
   mapping, which is what makes PBR/glass materials read correctly.
 - Backdrop/stage meshes bundled inside sample models (names matching
