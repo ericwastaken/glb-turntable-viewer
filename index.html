@@ -93,10 +93,10 @@
   </span>
   <span class="grp">Spin <input type="range" id="speed" min="0" max="3" step="0.05" value="0.3"></span>
   <button id="pauseBtn" title="Pause / resume spin">Pause</button>
+  <button id="sidecarBtn" title="View / edit the sidecar JSON">Sidecar…</button>
   <label class="grp" id="ovWrap" style="display:none" title="Toggle the loaded sidecar's material settings">
     <input type="checkbox" id="ovToggle" checked> Apply sidecar settings
   </label>
-  <button id="sidecarBtn" title="View / edit the sidecar JSON">Sidecar…</button>
 </div>
 
 <div id="editor">
@@ -266,12 +266,18 @@ function buildMaterial(spec) {
   return m;
 }
 
+// An entry with no (non-comment) properties is a no-op placeholder: it names
+// the mesh without overriding it, and "*" (if it has properties) applies.
+const hasProps = s => !!s && Object.keys(s).some(k => !k.startsWith('_'));
+
 function prepareSidecar() {
   overrideMats.clear();
   if (sidecarSpec?.materials && current) {
+    const star = sidecarSpec.materials['*'];
     current.traverse(o => {
       if (!o.isMesh) return;
-      const spec = sidecarSpec.materials[o.name] ?? sidecarSpec.materials['*'];
+      const named = sidecarSpec.materials[o.name];
+      const spec = hasProps(named) ? named : (hasProps(star) ? star : null);
       if (spec) overrideMats.set(o, buildMaterial(spec));
     });
   }
@@ -343,6 +349,8 @@ function lintSidecar(text) {
     }
     if (target !== '*' && meshNames.size && !meshNames.has(target))
       msgs.push({ lvl: 'warn', msg: `"${target}" doesn't match any mesh in the current model (meshes: ${[...meshNames].join(', ')}).` });
+    if (Object.keys(props).every(k => k.startsWith('_')))
+      msgs.push({ lvl: 'warn', msg: `"${target}" has no properties — it's a no-op placeholder${target === '*' ? '' : '; "*" (if it has properties) applies to this mesh'}.` });
     for (const [k, v] of Object.entries(props)) {
       if (k.startsWith('_')) continue;
       const t = PROP_TYPES[k];
@@ -363,18 +371,18 @@ function lintSidecar(text) {
 // --- sidecar editor UI ---------------------------------------------------------
 const editor = $('editor');
 const editorText = $('editorText');
-const EDITOR_TEMPLATE = `{
-  "_comment": "Sidecar material settings. \\"*\\" applies to every mesh; use a mesh name for per-part materials.",
-  "materials": {
-    "*": {
-      "color": "#cfc6e8",
-      "metalness": 0,
-      "roughness": 0.1,
-      "transmission": 0.9,
-      "ior": 1.45
-    }
-  }
-}`;
+
+// With no sidecar loaded, the editor opens on a skeleton generated from the
+// current model: "*" with starter properties, then every mesh identified by
+// name with an empty (no-op) object, ready to be filled in.
+function buildSkeleton() {
+  const mats = { '*': { color: '#ffffff', metalness: 0, roughness: 0.5 } };
+  current?.traverse(o => { if (o.isMesh && o.name) mats[o.name] = {}; });
+  return {
+    _comment: 'Sidecar skeleton generated from the current model. "*" applies to every mesh without its own non-empty entry; named entries below are placeholders — add properties to override that mesh specifically.',
+    materials: mats,
+  };
+}
 
 function renderLint(res) {
   const lint = $('lint');
@@ -390,8 +398,8 @@ function renderLint(res) {
 }
 
 function openEditor() {
-  editorText.value = sidecarSpec ? JSON.stringify(sidecarSpec, null, 2) : EDITOR_TEMPLATE;
-  $('sidecarNameEl').textContent = sidecarName ? `· ${sidecarName}` : '· (new)';
+  editorText.value = JSON.stringify(sidecarSpec ?? buildSkeleton(), null, 2);
+  $('sidecarNameEl').textContent = sidecarName ? `· ${sidecarName}` : '· (new, from current model)';
   renderLint(lintSidecar(editorText.value));
   editor.classList.add('open');
 }
@@ -415,8 +423,8 @@ $('applyBtn').onclick = () => {
 $('clearBtn').onclick = () => {
   sidecarSpec = null; sidecarName = '';
   prepareSidecar();
-  editorText.value = EDITOR_TEMPLATE;
-  $('sidecarNameEl').textContent = '· (new)';
+  editorText.value = JSON.stringify(buildSkeleton(), null, 2);
+  $('sidecarNameEl').textContent = '· (new, from current model)';
   renderLint(lintSidecar(editorText.value));
 };
 $('docsBtn').onclick = () =>
