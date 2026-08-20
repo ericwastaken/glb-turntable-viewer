@@ -176,6 +176,10 @@ function visibleBox(obj) {
 
 function applyPivot() {
   if (!current) return;
+  // Measure with the spin zeroed: a rotated pivot would skew the bounding box
+  // and produce a wrong offset (the "weird rotation until refresh" bug).
+  const rotY = pivot.rotation.y;
+  pivot.rotation.set(0, 0, 0);
   current.position.set(0, 0, 0);
   const box = visibleBox(current);
   const center = box.getCenter(new THREE.Vector3());
@@ -184,7 +188,8 @@ function applyPivot() {
   } else if (document.getElementById('pivotSelect').value === 'center') {
     current.position.copy(center).negate();   // spin axis through bbox center
   } // 'origin': leave at 0,0,0 — spin around the authored origin
-  frameCamera();
+  frameCamera();                               // frame while still unrotated
+  pivot.rotation.y = rotY;                     // resume the spin where it was
 }
 
 function frameCamera() {
@@ -298,6 +303,21 @@ pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Re
 const modelSelect = document.getElementById('modelSelect');
 modelSelect.onchange = () => loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
 
+// Custom loads (URL param, file picker, drag-drop) get their own dropdown
+// entry showing the file name and where it came from, so the selector always
+// reflects what is actually on screen.
+function selectCustom(name, sourceTag, value) {
+  let opt = document.getElementById('customOpt');
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.id = 'customOpt';
+    modelSelect.appendChild(opt);
+  }
+  opt.value = value;
+  opt.textContent = `${name} (${sourceTag})`;
+  modelSelect.value = value;
+}
+
 document.getElementById('pivotSelect').onchange = () => applyPivot();
 document.getElementById('ovToggle').onchange = e => applyOverrides(e.target.checked);
 
@@ -306,7 +326,9 @@ function handleFile(f) {
     f.text().then(t => { overrideSpec = JSON.parse(t); prepareOverrides(); refreshStatus(); })
       .catch(err => { status.textContent = `Bad overrides JSON: ${err.message}`; });
   } else {
-    loadURL(URL.createObjectURL(f), f.name);
+    const url = URL.createObjectURL(f);
+    selectCustom(f.name, 'file', url);
+    loadURL(url, f.name);
   }
 }
 document.getElementById('filePick').onchange = e => { if (e.target.files[0]) handleFile(e.target.files[0]); };
@@ -323,8 +345,12 @@ addEventListener('drop', e => {
 
 // ?model=path/to/file.glb overrides the default.
 const qs = params.get('model');
-if (qs) loadURL(qs, qs.split('/').pop());
-else loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
+if (qs) {
+  selectCustom(qs.split('/').pop(), 'URL', qs);
+  loadURL(qs, qs.split('/').pop());
+} else {
+  loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
+}
 
 // --- render loop ---------------------------------------------------------------
 const clock = new THREE.Clock();
