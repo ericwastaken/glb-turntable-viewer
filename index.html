@@ -225,6 +225,9 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// Debug handle for console experiments (material tweaks, inspection).
+window.viewer = { THREE, scene, camera, renderer, get model() { return current; } };
 </script>
 </body>
 </html>
