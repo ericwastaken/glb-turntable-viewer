@@ -45,6 +45,29 @@
     background: #04060fd0; border: 3px dashed #4257a0;
     font-size: 20px; z-index: 10;
   }
+
+  /* --- sidecar editor panel --- */
+  #editor {
+    position: fixed; top: 54px; right: 10px; bottom: 42px;
+    width: min(440px, calc(100vw - 20px));
+    display: none; flex-direction: column; gap: 8px;
+    background: #0d1120f2; border: 1px solid #2a3560; border-radius: 10px;
+    padding: 10px; z-index: 5;
+  }
+  #editor.open { display: flex; }
+  #editorHead { font-size: 13px; font-weight: 600; }
+  #editorHead .name { font-weight: 400; opacity: .7; }
+  #editorText {
+    flex: 1; resize: none; background: #0a0d18; color: #d8def0;
+    border: 1px solid #232c4e; border-radius: 8px; padding: 8px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+    line-height: 1.45; tab-size: 2; white-space: pre; overflow: auto;
+  }
+  #lint { max-height: 30%; overflow: auto; font-size: 12px; line-height: 1.5; }
+  #lint .error { color: #ff7a90; }
+  #lint .warn { color: #ffc978; }
+  #lint .ok { color: #7ce0a3; }
+  #editorBtns { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
@@ -60,7 +83,7 @@
     <option value="models/DispersionTest.glb">Dispersion test (prism glass)</option>
     <option value="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
   </select>
-  <label class="file">Load .glb…<input type="file" id="filePick" accept=".glb,.gltf,.json"></label>
+  <label class="file">Load .glb / .json…<input type="file" id="filePick" accept=".glb,.gltf,.json" multiple></label>
   <span class="grp">Pivot
     <select id="pivotSelect" title="Vertical axis the model spins around">
       <option value="center">Center (bounding box)</option>
@@ -69,13 +92,25 @@
   </span>
   <span class="grp">Spin <input type="range" id="speed" min="0" max="3" step="0.05" value="0.3"></span>
   <button id="pauseBtn" title="Pause / resume spin">Pause</button>
-  <label class="grp" id="ovWrap" style="display:none" title="Toggle materials from the sidecar .overrides.json">
-    <input type="checkbox" id="ovToggle" checked> Local materials
+  <label class="grp" id="ovWrap" style="display:none" title="Toggle the loaded sidecar's material settings">
+    <input type="checkbox" id="ovToggle" checked> Apply sidecar settings
   </label>
+  <button id="sidecarBtn" title="View / edit the sidecar JSON">Sidecar…</button>
+</div>
+
+<div id="editor">
+  <div id="editorHead">Sidecar settings (JSON) <span class="name" id="sidecarNameEl"></span></div>
+  <textarea id="editorText" spellcheck="false"></textarea>
+  <div id="lint"></div>
+  <div id="editorBtns">
+    <button id="applyBtn">Apply</button>
+    <button id="clearBtn" title="Remove the sidecar entirely">Clear sidecar</button>
+    <button id="closeBtn">Close</button>
+  </div>
 </div>
 
 <div id="status">Loading…</div>
-<div id="drop">Drop a .glb (or a .overrides.json) anywhere</div>
+<div id="drop">Drop .glb and/or sidecar .json anywhere</div>
 
 <script type="importmap">
 {
@@ -93,6 +128,7 @@ import { RoomEnvironment } from './vendor/environments/RoomEnvironment.js';
 
 const app = document.getElementById('app');
 const status = document.getElementById('status');
+const $ = id => document.getElementById(id);
 
 // --- renderer / scene / camera -------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -177,7 +213,7 @@ function visibleBox(obj) {
 function applyPivot() {
   if (!current) return;
   // Measure with the spin zeroed: a rotated pivot would skew the bounding box
-  // and produce a wrong offset (the "weird rotation until refresh" bug).
+  // and produce a wrong offset.
   const rotY = pivot.rotation.y;
   pivot.rotation.set(0, 0, 0);
   current.position.set(0, 0, 0);
@@ -185,7 +221,7 @@ function applyPivot() {
   const center = box.getCenter(new THREE.Vector3());
   if (manualPivot) {
     current.position.copy(manualPivot).negate();
-  } else if (document.getElementById('pivotSelect').value === 'center') {
+  } else if ($('pivotSelect').value === 'center') {
     current.position.copy(center).negate();   // spin axis through bbox center
   } // 'origin': leave at 0,0,0 — spin around the authored origin
   frameCamera();                               // frame while still unrotated
@@ -204,66 +240,182 @@ function frameCamera() {
   controls.update();
 }
 
-// --- material overrides (sidecar file) --------------------------------------
+// --- sidecar material settings ----------------------------------------------
 // Effects that don't survive a glTF export (e.g. glass/transmission looks) are
-// described in a sidecar JSON named "<model file>.overrides.json" sitting next
-// to the model. It is fetched automatically; if present, the "Local materials"
-// checkbox appears and toggles between the file's exported materials and the
-// override set. A .overrides.json can also be drag-dropped onto the page.
+// described in a sidecar JSON. The sidecar is EXPLICIT: pass it with
+// ?sidecar=path/to/file.json, pick it in the file dialog (multi-select with
+// the model), or drag-drop it — any filename works, and one sidecar can serve
+// several models. It stays loaded across model switches until cleared.
 // Schema: { "materials": { "<mesh name>" | "*": { MeshPhysicalMaterial props,
-// colors as hex strings } } }
-let overrideSpec = null;
+// colors as hex strings } } }. Keys starting with "_" are comments.
+let sidecarSpec = null;
+let sidecarName = '';
 const originalMats = new Map();   // mesh -> material as exported
-const overrideMats = new Map();   // mesh -> override material
+const overrideMats = new Map();   // mesh -> sidecar-built material
 
 const COLOR_PROPS = new Set(['color', 'attenuationColor', 'emissive', 'sheenColor', 'specularColor']);
 function buildMaterial(spec) {
   const m = new THREE.MeshPhysicalMaterial();
   for (const [k, v] of Object.entries(spec)) {
+    if (k.startsWith('_')) continue;
     if (COLOR_PROPS.has(k)) m[k] = new THREE.Color(v);
     else if (k in m) m[k] = v;
   }
   return m;
 }
 
-function prepareOverrides() {
+function prepareSidecar() {
   overrideMats.clear();
-  if (!overrideSpec?.materials || !current) return;
-  current.traverse(o => {
-    if (!o.isMesh) return;
-    const spec = overrideSpec.materials[o.name] ?? overrideSpec.materials['*'];
-    if (spec) overrideMats.set(o, buildMaterial(spec));
-  });
-  const wrap = document.getElementById('ovWrap');
-  wrap.style.display = overrideMats.size ? 'flex' : 'none';
-  if (overrideMats.size) applyOverrides(document.getElementById('ovToggle').checked);
+  if (sidecarSpec?.materials && current) {
+    current.traverse(o => {
+      if (!o.isMesh) return;
+      const spec = sidecarSpec.materials[o.name] ?? sidecarSpec.materials['*'];
+      if (spec) overrideMats.set(o, buildMaterial(spec));
+    });
+  }
+  $('ovWrap').style.display = overrideMats.size ? 'flex' : 'none';
+  applySidecar(overrideMats.size ? $('ovToggle').checked : false);
 }
 
-function applyOverrides(on) {
-  for (const [mesh, mat] of overrideMats) {
-    mesh.material = on ? mat : originalMats.get(mesh);
-  }
+function applySidecar(on) {
+  if (current) current.traverse(o => {
+    if (!o.isMesh) return;
+    o.material = (on && overrideMats.get(o)) || originalMats.get(o) || o.material;
+  });
   refreshStatus();
 }
 
-async function fetchOverrides(url) {
-  overrideSpec = null;
-  document.getElementById('ovWrap').style.display = 'none';
-  if (url.startsWith('blob:')) return;   // no sidecar next to a dropped file
-  try {
-    const r = await fetch(url + '.overrides.json');
-    if (r.ok) overrideSpec = await r.json();
-  } catch { /* no sidecar: fine */ }
+function setSidecar(spec, name) {
+  sidecarSpec = spec;
+  sidecarName = name;
+  prepareSidecar();
+  if (editor.classList.contains('open')) openEditor();   // refresh editor view
 }
+
+// --- sidecar linter -----------------------------------------------------------
+// Two layers: valid JSON, then valid-for-three.js (known MeshPhysicalMaterial
+// properties, right value types, mesh names that exist in the current model).
+const PROP_TYPES = {
+  color:'color', metalness:'unit', roughness:'unit', transmission:'unit',
+  thickness:'number', ior:'number', attenuationColor:'color',
+  attenuationDistance:'number', clearcoat:'unit', clearcoatRoughness:'unit',
+  emissive:'color', emissiveIntensity:'number', iridescence:'unit',
+  iridescenceIOR:'number', sheen:'unit', sheenColor:'color',
+  sheenRoughness:'unit', specularColor:'color', specularIntensity:'unit',
+  opacity:'unit', transparent:'boolean', envMapIntensity:'number',
+  flatShading:'boolean', wireframe:'boolean', reflectivity:'unit',
+  dispersion:'number', anisotropy:'number', anisotropyRotation:'number',
+};
+
+function lintSidecar(text) {
+  let spec;
+  try { spec = JSON.parse(text); }
+  catch (e) { return { ok: false, msgs: [{ lvl: 'error', msg: 'Invalid JSON: ' + e.message }] }; }
+  const msgs = [];
+  if (typeof spec !== 'object' || spec === null || Array.isArray(spec))
+    return { ok: false, msgs: [{ lvl: 'error', msg: 'Root must be a JSON object.' }] };
+  for (const k of Object.keys(spec))
+    if (k !== 'materials' && !k.startsWith('_'))
+      msgs.push({ lvl: 'warn', msg: `Unknown root key "${k}" (only "materials" is used; "_..." keys are comments).` });
+  if (!spec.materials || typeof spec.materials !== 'object' || Array.isArray(spec.materials)) {
+    msgs.push({ lvl: 'error', msg: 'Missing "materials" object at the root.' });
+    return { ok: false, msgs, spec };
+  }
+  const meshNames = new Set();
+  current?.traverse(o => { if (o.isMesh && o.name) meshNames.add(o.name); });
+  for (const [target, props] of Object.entries(spec.materials)) {
+    if (target.startsWith('_')) continue;
+    if (typeof props !== 'object' || props === null || Array.isArray(props)) {
+      msgs.push({ lvl: 'error', msg: `"${target}" must map to an object of material properties.` });
+      continue;
+    }
+    if (target !== '*' && meshNames.size && !meshNames.has(target))
+      msgs.push({ lvl: 'warn', msg: `"${target}" doesn't match any mesh in the current model (meshes: ${[...meshNames].join(', ')}).` });
+    for (const [k, v] of Object.entries(props)) {
+      if (k.startsWith('_')) continue;
+      const t = PROP_TYPES[k];
+      if (!t) { msgs.push({ lvl: 'warn', msg: `"${k}" is not a known MeshPhysicalMaterial property (threejs.org/docs → MeshPhysicalMaterial).` }); continue; }
+      if (t === 'color' && !(typeof v === 'number' || (typeof v === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v))))
+        msgs.push({ lvl: 'error', msg: `"${k}" must be a hex color string like "#cfc6e8" (got ${JSON.stringify(v)}).` });
+      else if ((t === 'number' || t === 'unit') && typeof v !== 'number')
+        msgs.push({ lvl: 'error', msg: `"${k}" must be a number (got ${JSON.stringify(v)}).` });
+      else if (t === 'unit' && typeof v === 'number' && (v < 0 || v > 1))
+        msgs.push({ lvl: 'warn', msg: `"${k}" is usually between 0 and 1 (got ${v}).` });
+      else if (t === 'boolean' && typeof v !== 'boolean')
+        msgs.push({ lvl: 'error', msg: `"${k}" must be true or false (got ${JSON.stringify(v)}).` });
+    }
+  }
+  return { ok: !msgs.some(m => m.lvl === 'error'), msgs, spec };
+}
+
+// --- sidecar editor UI ---------------------------------------------------------
+const editor = $('editor');
+const editorText = $('editorText');
+const EDITOR_TEMPLATE = `{
+  "_comment": "Sidecar material settings. \\"*\\" applies to every mesh; use a mesh name for per-part materials.",
+  "materials": {
+    "*": {
+      "color": "#cfc6e8",
+      "metalness": 0,
+      "roughness": 0.1,
+      "transmission": 0.9,
+      "ior": 1.45
+    }
+  }
+}`;
+
+function renderLint(res) {
+  const lint = $('lint');
+  if (res.msgs.length === 0) {
+    lint.innerHTML = '<div class="ok">✓ Valid JSON, valid three.js material settings.</div>';
+  } else {
+    lint.innerHTML = res.msgs.map(m =>
+      `<div class="${m.lvl}">${m.lvl === 'error' ? '✕' : '⚠'} ${m.msg.replace(/</g, '&lt;')}</div>`).join('') +
+      (res.ok ? '<div class="ok">✓ No blocking errors — warnings only.</div>' : '');
+  }
+  $('applyBtn').disabled = !res.ok;
+  return res;
+}
+
+function openEditor() {
+  editorText.value = sidecarSpec ? JSON.stringify(sidecarSpec, null, 2) : EDITOR_TEMPLATE;
+  $('sidecarNameEl').textContent = sidecarName ? `· ${sidecarName}` : '· (new)';
+  renderLint(lintSidecar(editorText.value));
+  editor.classList.add('open');
+}
+
+$('sidecarBtn').onclick = () => editor.classList.contains('open') ? editor.classList.remove('open') : openEditor();
+$('closeBtn').onclick = () => editor.classList.remove('open');
+let lintTimer;
+editorText.addEventListener('input', () => {
+  clearTimeout(lintTimer);
+  lintTimer = setTimeout(() => renderLint(lintSidecar(editorText.value)), 250);
+});
+$('applyBtn').onclick = () => {
+  const res = renderLint(lintSidecar(editorText.value));
+  if (!res.ok) return;
+  sidecarSpec = res.spec;
+  if (!sidecarName) sidecarName = '(edited in page)';
+  $('sidecarNameEl').textContent = `· ${sidecarName}`;
+  $('ovToggle').checked = true;
+  prepareSidecar();
+};
+$('clearBtn').onclick = () => {
+  sidecarSpec = null; sidecarName = '';
+  prepareSidecar();
+  editorText.value = EDITOR_TEMPLATE;
+  $('sidecarNameEl').textContent = '· (new)';
+  renderLint(lintSidecar(editorText.value));
+};
 
 // --- model loading -----------------------------------------------------------
 function refreshStatus() {
   const anims = mixer ? mixer._actions.length : 0;
-  const ov = overrideMats.size
-    ? (document.getElementById('ovToggle').checked ? ' • local materials ON' : ' • local materials off (as exported)')
-    : '';
+  const sc = overrideMats.size
+    ? ($('ovToggle').checked ? ` • sidecar ${sidecarName} ON` : ` • sidecar ${sidecarName} off (as exported)`)
+    : (sidecarSpec ? ` • sidecar ${sidecarName} matches no meshes` : '');
   status.textContent = `${baseLabel} • drag to orbit, wheel/pinch to zoom` +
-    (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + ov;
+    (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
 
 function setModel(gltf, label) {
@@ -282,26 +434,28 @@ function setModel(gltf, label) {
     gltf.animations.forEach(clip => mixer.clipAction(clip).play());
   }
   baseLabel = label;
-  prepareOverrides();
+  prepareSidecar();   // re-match the (sticky) sidecar against the new meshes
   refreshStatus();
 }
 
-async function loadURL(url, label) {
+function loadURL(url, label) {
   status.textContent = `Loading ${label}…`;
-  await fetchOverrides(url);
   loader.load(url, g => setModel(g, label),
     xhr => { if (xhr.total) status.textContent = `Loading ${label}… ${Math.round(xhr.loaded / xhr.total * 100)}%`; },
     err => { status.textContent = `Failed to load ${label}: ${err.message ?? err}`; console.error(err); });
 }
 
 // --- UI ----------------------------------------------------------------------
-const speedInput = document.getElementById('speed');
-const pauseBtn = document.getElementById('pauseBtn');
+const speedInput = $('speed');
+const pauseBtn = $('pauseBtn');
 let paused = false;
 pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; };
 
-const modelSelect = document.getElementById('modelSelect');
+const modelSelect = $('modelSelect');
 modelSelect.onchange = () => loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
+
+$('pivotSelect').onchange = () => applyPivot();
+$('ovToggle').onchange = e => applySidecar(e.target.checked);
 
 // Custom loads (URL param, file picker, drag-drop) get their own dropdown
 // entry showing the file name and where it came from, so the selector always
@@ -318,39 +472,59 @@ function selectCustom(name, sourceTag, value) {
   modelSelect.value = value;
 }
 
-document.getElementById('pivotSelect').onchange = () => applyPivot();
-document.getElementById('ovToggle').onchange = e => applyOverrides(e.target.checked);
-
-function handleFile(f) {
-  if (f.name.endsWith('.json')) {
-    f.text().then(t => { overrideSpec = JSON.parse(t); prepareOverrides(); refreshStatus(); })
-      .catch(err => { status.textContent = `Bad overrides JSON: ${err.message}`; });
-  } else {
-    const url = URL.createObjectURL(f);
-    selectCustom(f.name, 'file', url);
-    loadURL(url, f.name);
+// Accepts any mix of one model file and one sidecar .json, in one gesture.
+async function handleFiles(files) {
+  const list = [...files];
+  const json = list.find(f => f.name.toLowerCase().endsWith('.json'));
+  const model = list.find(f => /\.(glb|gltf)$/i.test(f.name));
+  if (json) {
+    try {
+      const res = lintSidecar(await json.text());
+      if (!res.ok) { status.textContent = `Sidecar ${json.name} has errors — open Sidecar… to fix.`; }
+      setSidecar(res.spec ?? null, json.name);
+      if (res.spec && !editor.classList.contains('open') && !res.ok) { openEditor(); editorText.value = await json.text(); renderLint(res); }
+    } catch (err) { status.textContent = `Could not read ${json.name}: ${err.message}`; }
+  }
+  if (model) {
+    const url = URL.createObjectURL(model);
+    selectCustom(model.name, 'file', url);
+    loadURL(url, model.name);
+  } else if (json) {
+    prepareSidecar();   // sidecar-only: apply to whatever is on screen
   }
 }
-document.getElementById('filePick').onchange = e => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+$('filePick').onchange = e => { if (e.target.files.length) handleFiles(e.target.files); };
 
-// Drag & drop a .glb (or a .overrides.json) from Finder.
-const drop = document.getElementById('drop');
+// Drag & drop .glb and/or sidecar .json from Finder (together or separately).
+const drop = $('drop');
 addEventListener('dragover', e => { e.preventDefault(); drop.style.display = 'flex'; });
 drop.addEventListener('dragleave', () => drop.style.display = 'none');
 addEventListener('drop', e => {
   e.preventDefault(); drop.style.display = 'none';
-  const f = e.dataTransfer.files?.[0];
-  if (f) handleFile(f);
+  if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
 });
 
-// ?model=path/to/file.glb overrides the default.
-const qs = params.get('model');
-if (qs) {
-  selectCustom(qs.split('/').pop(), 'URL', qs);
-  loadURL(qs, qs.split('/').pop());
-} else {
-  loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
-}
+// ?model=path.glb picks the model; ?sidecar=path.json loads material settings.
+// The sidecar is never assumed from the model name — it must be passed.
+(async () => {
+  const sc = params.get('sidecar');
+  if (sc) {
+    try {
+      const r = await fetch(sc);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const res = lintSidecar(await r.text());
+      setSidecar(res.spec ?? null, sc.split('/').pop());
+      if (!res.ok) status.textContent = `Sidecar ${sc} has errors — open Sidecar… to review.`;
+    } catch (err) { status.textContent = `Could not load sidecar ${sc}: ${err.message}`; }
+  }
+  const qs = params.get('model');
+  if (qs) {
+    selectCustom(qs.split('/').pop(), 'URL', qs);
+    loadURL(qs, qs.split('/').pop());
+  } else {
+    loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
+  }
+})();
 
 // --- render loop ---------------------------------------------------------------
 const clock = new THREE.Clock();

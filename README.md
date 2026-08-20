@@ -31,13 +31,20 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
   "Center" (through the middle of the visible bounding box, the default) or
   "As exported" (the model file's own origin). A manual axis can be forced
   with `?pivot=x,y,z` in model units.
-- **Local material overrides**: effects that don't survive a glTF export
-  (e.g. glass/transmission looks) can be described in a sidecar JSON named
-  `<model file>.overrides.json` next to the model. It loads automatically and
-  a "Local materials" checkbox appears, toggling between as-exported and
-  override materials. Schema: `{"materials": {"<mesh name>" or "*":
-  {MeshPhysicalMaterial props, colors as hex strings}}}`. A `.overrides.json`
-  can also be drag-dropped onto the page to apply to the current model.
+- **Sidecar material settings**: effects that don't survive a glTF export
+  (e.g. glass/transmission looks) can be described in a sidecar JSON with any
+  filename. The sidecar is always explicit — pass `?sidecar=path/to/file.json`
+  in the URL, multi-select it together with the model in the file dialog, or
+  drag-drop it (with the model or on its own). One sidecar can serve several
+  models: it stays loaded across model switches until cleared. When one is
+  loaded, an "Apply sidecar settings" checkbox toggles between as-exported and
+  sidecar materials. Schema: `{"materials": {"<mesh name>" or "*":
+  {MeshPhysicalMaterial props, colors as hex strings}}}`; keys starting with
+  `_` are comments.
+- **Sidecar editor**: the "Sidecar…" button opens an in-page JSON editor with
+  live linting — JSON validity plus three.js validity (known
+  MeshPhysicalMaterial properties, value types, 0–1 ranges, and whether mesh
+  names exist in the current model). Apply is blocked while errors remain.
 - **Lighting**: procedurally generated RoomEnvironment IBL + ACES tone
   mapping, which is what makes PBR/glass materials read correctly.
 - Backdrop/stage meshes bundled inside sample models (names matching
