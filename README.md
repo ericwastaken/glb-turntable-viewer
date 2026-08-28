@@ -66,6 +66,70 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 | `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment, self-hosted. |
 | `models/` | Sample models from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets): glass/transmission tests (DragonAttenuation, MosquitoInAmber, GlassVaseFlowers, GlassHurricaneCandleHolder, IridescentDishWithOlives, DispersionTest) plus DamagedHelmet (PBR). |
 
+## Custom components (looks a sidecar can't describe)
+
+A sidecar covers everything three.js's standard materials can do. When a look
+needs more than that — your own shader, animated texture layers, even your own
+geometry — you can hand the viewer a **component**: a JavaScript file that
+exports one function. No build tools, no bundler, no pull request needed.
+
+**Start from the working example**:
+[`components/example-shader-orb.js`](components/example-shader-orb.js) — open
+[`?component=./components/example-shader-orb.js`](./?component=./components/example-shader-orb.js)
+to see it run, then copy the file and change what it returns. Every field is
+explained in its comments.
+
+The contract, in short:
+
+```js
+export async function createComponent(ctx) {
+  // ctx = { THREE, renderer, scene, camera, assetPath }
+  return {
+    object,      // a THREE.Object3D shown on the turntable (instead of a model), OR
+    material,    // a THREE.Material applied to the currently loaded model
+    update(dt),  // optional: advance animations, called every frame
+    dispose(),   // optional: cleanup on unload
+    framing,     // optional: { heightFraction: 0.4, verticalCenter: 0.45 }
+  };
+}
+```
+
+**Already have code that builds a three.js object?** Wrap it — do not rewrite
+it. A minimal adapter next to your existing files:
+
+```js
+import { buildMyThing } from './my-existing-code.js';
+
+export async function createComponent(ctx) {
+  const thing = await buildMyThing(ctx.THREE, ctx.assetPath);
+  return {
+    object: thing.group,
+    update: (dt) => thing.tick?.(dt),
+    dispose: () => thing.cleanup?.(),
+  };
+}
+```
+
+**How to run yours** (folder packages with multiple files and textures):
+
+1. Put your folder next to the viewer's files (or anywhere under the folder
+   you serve).
+2. Serve the whole thing — `npx serve .` or
+   `python3 -m http.server 8000` — and open the viewer through that server.
+3. Add `?component=./your-folder/adapter.js` to the viewer URL.
+4. To hand it back, zip the folder and send it — the recipient does the same
+   three steps.
+
+Single-file components (like the example) can simply be **drag-dropped onto
+the page** — no server path needed. Folder packages must use the URL route,
+because a dropped file can't resolve its relative imports.
+
+**A note on trust:** a component is real code running in your browser with
+the same powers as the DevTools console. The viewer only loads components
+from its own address (relative paths) or from files you explicitly pick or
+drop — never from remote URLs — so nothing can run without you choosing it.
+Only load component files from people you trust.
+
 ## Known limits (deliberate; it's a proof of concept)
 
 - No Draco/meshopt decoders: use uncompressed GLB files, or add `DRACOLoader`

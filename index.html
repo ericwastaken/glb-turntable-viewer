@@ -107,7 +107,7 @@
     <option value="models/DispersionTest.glb">Dispersion test (prism glass)</option>
     <option value="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
   </select>
-  <label class="file">Load .glb / .json…<input type="file" id="filePick" accept=".glb,.gltf,.json" multiple></label>
+  <label class="file">Load .glb / .json / .js…<input type="file" id="filePick" accept=".glb,.gltf,.json,.js" multiple></label>
   <span class="grp">Pivot
     <select id="pivotSelect" title="Vertical axis the model spins around">
       <option value="center">Center (bounding box)</option>
@@ -120,6 +120,7 @@
   <label class="grp" id="ovWrap" style="display:none" title="Toggle the loaded sidecar's material settings">
     <input type="checkbox" id="ovToggle" checked> Apply sidecar settings
   </label>
+  <button id="compChip" style="display:none" title="Unload the custom component"><span id="compName"></span> ✕</button>
 </div>
 
 <div id="editor">
@@ -135,7 +136,7 @@
 </div>
 
 <div id="status">Loading…</div>
-<div id="drop">Drop .glb and/or sidecar .json anywhere</div>
+<div id="drop">Drop .glb, sidecar .json, or component .js anywhere</div>
 
 <script type="importmap">
 {
@@ -453,17 +454,130 @@ $('clearBtn').onclick = () => {
 $('docsBtn').onclick = () =>
   window.open('https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial', '_blank', 'noopener');
 
+// --- custom component modules --------------------------------------------------
+// A component is an ES module exporting `createComponent(ctx)` — the escape
+// hatch for looks a sidecar can't express (custom shaders, animated layers).
+// It may return an `object` (a THREE.Object3D shown in place of the model,
+// under the pivot so spin works) or a `material` (applied to the loaded
+// model's meshes), plus optional update(dt) / dispose() / framing hints.
+// SECURITY: a component runs with full page privileges, like pasting code
+// into the DevTools console. Components therefore load ONLY from this site's
+// own origin (?component=relative/path.js) or from a file the user explicitly
+// picks/drops. Cross-origin URLs are rejected.
+let component = null;   // { name, api, kind: 'object' | 'material' }
+
+function unloadComponent(reloadModel = false) {
+  if (!component) return;
+  try { component.api.dispose?.(); } catch (e) { console.warn('component dispose:', e); }
+  if (component.kind === 'object' && component.api.object) pivot.remove(component.api.object);
+  if (component.kind === 'material' && current) {
+    current.traverse(o => { if (o.isMesh && originalMats.has(o)) o.material = originalMats.get(o); });
+  }
+  component = null;
+  $('compChip').style.display = 'none';
+  refreshStatus();
+  if (reloadModel) modelSelect.onchange();
+}
+
+async function activateComponent(mod, name, assetPath) {
+  if (typeof mod.createComponent !== 'function') {
+    status.textContent = `Component ${name}: module has no createComponent() export.`;
+    return;
+  }
+  unloadComponent();
+  let api;
+  try {
+    api = await mod.createComponent({ THREE, renderer, scene, camera, assetPath });
+  } catch (err) {
+    status.textContent = `Component ${name} failed to start: ${err.message}`;
+    console.error(err); return;
+  }
+  if (api?.object) {
+    if (current) { pivot.remove(current); current = null; }   // component replaces the model
+    pivot.add(api.object);
+    pivot.rotation.set(0, 0, 0);
+    component = { name, api, kind: 'object' };
+    frameComponent(api);
+  } else if (api?.material) {
+    if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; return; }
+    current.traverse(o => { if (o.isMesh) o.material = api.material; });
+    component = { name, api, kind: 'material' };
+  } else {
+    status.textContent = `Component ${name}: createComponent() must return { object } or { material }.`;
+    return;
+  }
+  $('compName').textContent = name;
+  $('compChip').style.display = 'inline-block';
+  refreshStatus();
+}
+
+function frameComponent(api) {
+  const box = visibleBox(pivot);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const f = api.framing;
+  const halfFov = (camera.fov * Math.PI / 180) / 2;
+  if (f?.heightFraction) {
+    // Honor the component's composition: its height as a fraction of the
+    // viewport, its vertical center as a fraction from the top.
+    const hf = Math.min(1, Math.max(0.05, f.heightFraction));
+    const dist = (size.y / (2 * hf)) / Math.tan(halfFov);
+    const vc = f.verticalCenter ?? 0.5;
+    const yShift = (0.5 - vc) * 2 * dist * Math.tan(halfFov);
+    controls.target.set(center.x, center.y - yShift, center.z);
+    camera.position.set(center.x, center.y - yShift, center.z + dist);
+    camera.near = Math.max(0.01, dist / 100); camera.far = dist * 20;
+    camera.updateProjectionMatrix();
+    controls.update();
+  } else {
+    frameCamera();
+  }
+}
+
+async function loadComponentURL(path) {
+  let url;
+  try { url = new URL(path, location.href); } catch { status.textContent = `Bad component path: ${path}`; return; }
+  if (url.origin !== location.origin) {
+    status.textContent = 'Components only load from this site\'s own address (a relative path). Remote URLs are not allowed.';
+    return;
+  }
+  status.textContent = `Loading component ${path}…`;
+  try {
+    const mod = await import(url.href);
+    await activateComponent(mod, url.pathname.split('/').pop(), url.href.slice(0, url.href.lastIndexOf('/') + 1));
+  } catch (err) {
+    status.textContent = `Could not load component ${path}: ${err.message}`;
+    console.error(err);
+  }
+}
+
+async function loadComponentFile(f) {
+  const blobUrl = URL.createObjectURL(f);
+  try {
+    const mod = await import(blobUrl);
+    await activateComponent(mod, f.name, './');
+  } catch (err) {
+    status.textContent = `Component ${f.name} failed to load — dropped files must be single-file modules (no relative imports). For folder packages, serve them and use ?component=. (${err.message})`;
+    console.error(err);
+  }
+}
+
+$('compChip').onclick = () => unloadComponent(true);
+
 // --- model loading -----------------------------------------------------------
 function refreshStatus() {
   const anims = mixer ? mixer._actions.length : 0;
   const sc = overrideMats.size
     ? ($('ovToggle').checked ? ` • sidecar ${sidecarName} ON` : ` • sidecar ${sidecarName} off (as exported)`)
     : (sidecarSpec ? ` • sidecar ${sidecarName} matches no meshes` : '');
-  status.textContent = `${baseLabel} • drag to orbit, wheel/pinch to zoom` +
+  const comp = component ? ` • component ${component.name} (${component.kind})` : '';
+  const shown = component?.kind === 'object' ? component.name : baseLabel;
+  status.textContent = `${shown} • drag to orbit, wheel/pinch to zoom` + comp +
     (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
 
 function setModel(gltf, label) {
+  unloadComponent();   // a fresh model starts clean; reload the component after if wanted
   if (current) { pivot.remove(current); current.traverse(o => { o.geometry?.dispose?.(); }); }
   mixer = null;
   originalMats.clear();
@@ -481,6 +595,10 @@ function setModel(gltf, label) {
   baseLabel = label;
   prepareSidecar();   // re-match the (sticky) sidecar against the new meshes
   refreshStatus();
+  if (pendingComponentPath) {
+    const p = pendingComponentPath; pendingComponentPath = null;
+    loadComponentURL(p);
+  }
 }
 
 function loadURL(url, label) {
@@ -526,6 +644,7 @@ async function handleFiles(files) {
   const list = [...files];
   const json = list.find(f => f.name.toLowerCase().endsWith('.json'));
   const model = list.find(f => /\.(glb|gltf)$/i.test(f.name));
+  const js = list.find(f => f.name.toLowerCase().endsWith('.js'));
   if (json) {
     try {
       const res = lintSidecar(await json.text());
@@ -541,6 +660,7 @@ async function handleFiles(files) {
   } else if (json) {
     prepareSidecar();   // sidecar-only: apply to whatever is on screen
   }
+  if (js) loadComponentFile(js);   // after any model in the same gesture
 }
 $('filePick').onchange = e => { if (e.target.files.length) handleFiles(e.target.files); };
 
@@ -553,8 +673,10 @@ addEventListener('drop', e => {
   if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
 });
 
-// ?model=path.glb picks the model; ?sidecar=path.json loads material settings.
+// ?model=path.glb picks the model; ?sidecar=path.json loads material settings;
+// ?component=relative/path.js loads a custom component (same-origin only).
 // The sidecar is never assumed from the model name — it must be passed.
+let pendingComponentPath = params.get('component');
 (async () => {
   const sc = params.get('sidecar');
   if (sc) await loadSidecarURL(sc);
@@ -571,7 +693,9 @@ addEventListener('drop', e => {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
-  if (current && !paused) pivot.rotation.y += dt * parseFloat(speedInput.value);
+  if ((current || component?.kind === 'object') && !paused)
+    pivot.rotation.y += dt * parseFloat(speedInput.value);
+  try { component?.api.update?.(dt); } catch (e) { console.error('component update:', e); }
   mixer?.update(dt);
   controls.update();
   renderer.render(scene, camera);
