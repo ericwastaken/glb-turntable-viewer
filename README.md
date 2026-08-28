@@ -23,7 +23,8 @@ Full contents:
 2. [What's in the page](#whats-in-the-page) — models, sidecars, pivot, spin
 3. [Files](#files) — what's in this repo
 4. [Custom components](#custom-components-looks-a-sidecar-cant-describe) —
-   single .js modules for looks a sidecar can't describe (developer path)
+   single .js modules for looks a sidecar can't describe (developer path) ·
+   [learn more](#learn-more-its-all-just-threejs)
 5. [**Icon packs (zip)**](#icon-packs-zip-the-no-tools-workflow-for-designers)
    — the no-tools designer path:
    [try it](#try-it-in-30-seconds) ·
@@ -99,6 +100,9 @@ A sidecar covers everything three.js's standard materials can do. When a look
 needs more than that — your own shader, animated texture layers, even your own
 geometry — you can hand the viewer a **component**: a JavaScript file that
 exports one function. No build tools, no bundler, no pull request needed.
+A component is ordinary [three.js](https://threejs.org) code in a thin
+wrapper: anything three.js can do, a component can do — only the entry
+function below is specific to this viewer ([learn more](#learn-more-its-all-just-threejs)).
 
 **Start from the working example**:
 [`components/example-shader-orb.js`](components/example-shader-orb.js) — open
@@ -156,6 +160,25 @@ the same powers as the DevTools console. The viewer only loads components
 from its own address (relative paths) or from files you explicitly pick or
 drop — never from remote URLs — so nothing can run without you choosing it.
 Only load component files from people you trust.
+
+### Learn more: it's all just three.js
+
+Everything inside a component — geometry, materials, shaders, motion — is
+plain three.js, and it's documented far better elsewhere than we could here:
+
+- [three.js manual](https://threejs.org/manual/) — learn from zero: scenes,
+  meshes, materials, and the animation loop (the `update(dt)` of the world).
+- [three.js API docs](https://threejs.org/docs/) — the reference. The two
+  usual entry points:
+  [`MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)
+  for standard looks and
+  [`ShaderMaterial`](https://threejs.org/docs/#api/en/materials/ShaderMaterial)
+  for fully custom ones.
+- [three.js examples](https://threejs.org/examples/) — hundreds of live demos
+  of what's possible, each with its source code.
+- [The Book of Shaders](https://thebookofshaders.com/) — a gentle,
+  designer-friendly introduction to GLSL, for looks like the shader-orb
+  example and beyond.
 
 ## Icon packs (zip): the no-tools workflow for designers
 
