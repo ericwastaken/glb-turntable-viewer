@@ -138,6 +138,18 @@ code. Under the hood the viewer unzips in the browser (self-hosted fflate) and
 serves the contents from a tiny service worker, so the package's relative
 imports and asset paths work untouched; nothing is uploaded anywhere.
 
+**Try it in 30 seconds:** download
+[`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
+(4 KB — two procedural icons, no asset files) and drag it onto
+[the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
+dropdown switches to the pack's icons ("twist" and "gem") plus an
+"⏏ Unload zip" entry. While a pack is loaded, the turntable and sidecar
+controls hide — a pack owns its own motion, materials, and framing.
+
+Its source is [`components/example-pack/`](components/example-pack/): copy
+that folder as the skeleton for a real pack. `icons/twist` is the minimal
+icon (two required exports); `icons/gem` adds the optional motion controller.
+
 **Zip layout:**
 
 ```
@@ -162,12 +174,29 @@ my-icons.zip
 | `IconController` | no | motion/animation controller with `update(dt)` |
 | `LAYOUT` | no | `{ iconHeightFraction, verticalCenter }` framing |
 
-**When a zip is loaded, the model dropdown switches to the pack's icons**,
-plus an "⏏ Unload zip" entry that restores the bundled samples. Loading any
-other model or a new zip also exits the pack.
+**Packaging a multi-icon zip, step by step:**
+
+1. Make a folder for the pack. Copy `component.js` into it from
+   [`components/pack.component.js`](components/pack.component.js) — this file
+   is universal and is never edited.
+2. For each icon, add a folder under `icons/` containing `src/index.js` with
+   the standard exports (table above) and, if it loads files, an `assets/`
+   folder next to it. Start from
+   [`components/example-pack/icons/`](components/example-pack/icons/).
+3. List the icon folder names in `icons.json`:
+   `{"icons": ["nameA", "nameB"]}`.
+4. Right-click the pack folder → **Compress** (macOS) / **Send to →
+   Compressed folder** (Windows).
+
+**Loading it on the page:** drag the zip anywhere onto the viewer (or use the
+Load… button). The model dropdown switches to the pack's icons, plus an
+"⏏ Unload zip (back to samples)" entry that restores everything. While a pack
+is loaded the turntable spin, pivot, and sidecar controls hide — the pack owns
+its own motion, materials, and framing. Loading any other model or a new zip
+also exits the pack.
 
 Adding an icon to an existing pack: drop its folder under `icons/`, add its
-name to `icons.json`, right-click → Compress, drag the new zip onto the page.
+name to `icons.json`, re-compress, drag the new zip onto the page.
 
 The trust note above applies doubly to zips: the pack runs real code —
 only load packs from people you trust.
