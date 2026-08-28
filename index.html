@@ -572,8 +572,9 @@ async function activatePackIcon(name) {
 function unloadZip(reloadDefault) {
   if (!zipState) return;
   unloadComponent();
-  const { savedHTML, savedValue } = zipState;
+  const { savedHTML, savedValue, savedSpin } = zipState;
   zipState = null;
+  if (savedSpin !== undefined) $('speed').value = savedSpin;
   caches.open('zipfs').then(async c => { for (const k of await c.keys()) c.delete(k); }).catch(() => {});
   if (savedHTML !== null) {
     modelSelect.innerHTML = savedHTML;
@@ -648,7 +649,11 @@ async function loadZipFile(f) {
   status.textContent = `Loading ${f.name}…`;
   try {
     const mod = await import(base + entry);
-    zipState = { label: f.name, savedHTML: null, savedValue: null, icons: null };
+    zipState = { label: f.name, savedHTML: null, savedValue: null, icons: null,
+                 savedSpin: $('speed').value };
+    // A pack is expected to bring its own motion (controllers, timelines),
+    // so the turntable spin is zeroed while a zip is loaded.
+    $('speed').value = 0;
     await activateComponent(mod, f.name, base);
     if (!zipState.icons) swapDropdown(f.name, []);   // non-pack zip: still offer the unload entry
   } catch (err) {
