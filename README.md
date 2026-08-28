@@ -6,6 +6,33 @@ A single static page that spins a GLB model over a starfield, rendered with
 self-hosted three.js. No CDN, no build step, no licenses. Everything needed is
 in this folder.
 
+## Where to start
+
+**Designer? You want the easy path:**
+[**Icon packs (zip)**](#icon-packs-zip-the-no-tools-workflow-for-designers) —
+drag one zip onto the page, no tools, no code. Jump straight to the
+[30-second try-it](#try-it-in-30-seconds) with a downloadable example, the
+step-by-step [packaging walkthrough](#packaging-a-multi-icon-zip-step-by-step),
+[loading it on the page](#loading-it-on-the-page), or the
+[standard exports table](#standard-exports) to hand to whoever builds your
+icon code.
+
+Full contents:
+
+1. [Run it locally](#run-it-locally) — serve the folder, open the page
+2. [What's in the page](#whats-in-the-page) — models, sidecars, pivot, spin
+3. [Files](#files) — what's in this repo
+4. [Custom components](#custom-components-looks-a-sidecar-cant-describe) —
+   single .js modules for looks a sidecar can't describe (developer path)
+5. [**Icon packs (zip)**](#icon-packs-zip-the-no-tools-workflow-for-designers)
+   — the no-tools designer path:
+   [try it](#try-it-in-30-seconds) ·
+   [layout](#zip-layout) ·
+   [standard exports](#standard-exports) ·
+   [packaging](#packaging-a-multi-icon-zip-step-by-step) ·
+   [loading](#loading-it-on-the-page)
+6. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
+
 ## Run it locally
 
 Any static server works (ES modules won't load from file://):
@@ -138,7 +165,9 @@ code. Under the hood the viewer unzips in the browser (self-hosted fflate) and
 serves the contents from a tiny service worker, so the package's relative
 imports and asset paths work untouched; nothing is uploaded anywhere.
 
-**Try it in 30 seconds:** download
+### Try it in 30 seconds
+
+Download
 [`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
 (4 KB — two procedural icons, no asset files) and drag it onto
 [the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
@@ -150,7 +179,7 @@ Its source is [`components/example-pack/`](components/example-pack/): copy
 that folder as the skeleton for a real pack. `icons/twist` is the minimal
 icon (two required exports); `icons/gem` adds the optional motion controller.
 
-**Zip layout:**
+### Zip layout
 
 ```
 my-icons.zip
@@ -163,7 +192,9 @@ my-icons.zip
     └── nameB/ ...
 ```
 
-**Standard exports** — each icon's `icons/<name>/src/index.js` must export
+### Standard exports
+
+Each icon's `icons/<name>/src/index.js` must export
 (aliases of its own functions are fine):
 
 | export | required | what it is |
@@ -174,7 +205,7 @@ my-icons.zip
 | `IconController` | no | motion/animation controller with `update(dt)` |
 | `LAYOUT` | no | `{ iconHeightFraction, verticalCenter }` framing |
 
-**Packaging a multi-icon zip, step by step:**
+### Packaging a multi-icon zip, step by step
 
 1. Make a folder for the pack. Copy `component.js` into it from
    [`components/pack.component.js`](components/pack.component.js) — this file
@@ -188,7 +219,9 @@ my-icons.zip
 4. Right-click the pack folder → **Compress** (macOS) / **Send to →
    Compressed folder** (Windows).
 
-**Loading it on the page:** drag the zip anywhere onto the viewer (or use the
+### Loading it on the page
+
+Drag the zip anywhere onto the viewer (or use the
 Load… button). The model dropdown switches to the pack's icons, plus an
 "⏏ Unload zip (back to samples)" entry that restores everything. While a pack
 is loaded the turntable spin, pivot, and sidecar controls hide — the pack owns
