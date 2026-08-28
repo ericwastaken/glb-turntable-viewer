@@ -107,7 +107,7 @@
     <option value="models/DispersionTest.glb">Dispersion test (prism glass)</option>
     <option value="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
   </select>
-  <label class="file">Load .glb / .json / .js…<input type="file" id="filePick" accept=".glb,.gltf,.json,.js" multiple></label>
+  <label class="file">Load .glb / .json / .js / .zip…<input type="file" id="filePick" accept=".glb,.gltf,.json,.js,.zip" multiple></label>
   <span class="grp">Pivot
     <select id="pivotSelect" title="Vertical axis the model spins around">
       <option value="center">Center (bounding box)</option>
@@ -136,7 +136,7 @@
 </div>
 
 <div id="status">Loading…</div>
-<div id="drop">Drop .glb, sidecar .json, or component .js anywhere</div>
+<div id="drop">Drop .glb, sidecar .json, component .js, or icon-pack .zip anywhere</div>
 
 <script type="importmap">
 {
@@ -483,6 +483,27 @@ function unloadComponent(reloadModel = false) {
   if (reloadModel) modelSelect.onchange();
 }
 
+function applyComponentApi(api, name) {
+  if (api?.object) {
+    if (current) { pivot.remove(current); current = null; }   // component replaces the model
+    pivot.add(api.object);
+    pivot.rotation.set(0, 0, 0);
+    component = { name, api, kind: 'object' };
+    frameComponent(api);
+  } else if (api?.material) {
+    if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; return false; }
+    current.traverse(o => { if (o.isMesh) o.material = api.material; });
+    component = { name, api, kind: 'material' };
+  } else {
+    status.textContent = `Component ${name}: createComponent() must return { object }, { material }, or { icons }.`;
+    return false;
+  }
+  $('compName').textContent = name;
+  $('compChip').style.display = 'inline-block';
+  refreshStatus();
+  return true;
+}
+
 async function activateComponent(mod, name, assetPath) {
   if (typeof mod.createComponent !== 'function') {
     status.textContent = `Component ${name}: module has no createComponent() export.`;
@@ -496,23 +517,145 @@ async function activateComponent(mod, name, assetPath) {
     status.textContent = `Component ${name} failed to start: ${err.message}`;
     console.error(err); return;
   }
-  if (api?.object) {
-    if (current) { pivot.remove(current); current = null; }   // component replaces the model
-    pivot.add(api.object);
-    pivot.rotation.set(0, 0, 0);
-    component = { name, api, kind: 'object' };
-    frameComponent(api);
-  } else if (api?.material) {
-    if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; return; }
-    current.traverse(o => { if (o.isMesh) o.material = api.material; });
-    component = { name, api, kind: 'material' };
-  } else {
-    status.textContent = `Component ${name}: createComponent() must return { object } or { material }.`;
+  // Icon pack: { icons: { name: async () => api } } — dropdown swaps to the
+  // pack's contents plus an "unload" entry.
+  if (api?.icons && typeof api.icons === 'object' && !Array.isArray(api.icons)) {
+    await enterPack(name, api.icons);
     return;
   }
-  $('compName').textContent = name;
-  $('compChip').style.display = 'inline-block';
-  refreshStatus();
+  applyComponentApi(api, name);
+}
+
+// --- icon packs / zip mode -----------------------------------------------------
+// While a pack (usually from a dropped zip) is active, the model dropdown
+// lists ONLY the pack's icons plus one entry to unload and return to the
+// bundled samples. The original dropdown is restored on unload.
+let zipState = null;   // { label, savedHTML, savedValue, icons: {name: builder} | null }
+
+function swapDropdown(label, iconNames) {
+  if (!zipState.savedHTML) {
+    zipState.savedHTML = modelSelect.innerHTML;
+    zipState.savedValue = modelSelect.value;
+  }
+  modelSelect.innerHTML = '';
+  for (const n of iconNames) {
+    const o = document.createElement('option');
+    o.value = 'zipicon:' + n;
+    o.textContent = n;
+    modelSelect.appendChild(o);
+  }
+  const u = document.createElement('option');
+  u.value = '__unloadzip__';
+  u.textContent = '⏏ Unload zip (back to samples)';
+  modelSelect.appendChild(u);
+  if (iconNames.length) modelSelect.value = 'zipicon:' + iconNames[0];
+}
+
+async function enterPack(label, icons) {
+  const names = Object.keys(icons);
+  if (!names.length) { status.textContent = `${label}: the pack lists no icons.`; return; }
+  zipState = zipState ?? { label, savedHTML: null, savedValue: null, icons: null };
+  zipState.icons = icons;
+  swapDropdown(label, names);
+  await activatePackIcon(names[0]);
+}
+
+async function activatePackIcon(name) {
+  unloadComponent();
+  status.textContent = `Loading ${name}…`;
+  let api;
+  try { api = await zipState.icons[name](); }
+  catch (err) { status.textContent = `Icon ${name} failed: ${err.message}`; console.error(err); return; }
+  applyComponentApi(api, name);
+}
+
+function unloadZip(reloadDefault) {
+  if (!zipState) return;
+  unloadComponent();
+  const { savedHTML, savedValue } = zipState;
+  zipState = null;
+  caches.open('zipfs').then(async c => { for (const k of await c.keys()) c.delete(k); }).catch(() => {});
+  if (savedHTML !== null) {
+    modelSelect.innerHTML = savedHTML;
+    modelSelect.value = savedValue || modelSelect.options[0].value;
+  }
+  if (reloadDefault) modelSelect.onchange();
+}
+
+// --- zip loading (fflate + zipfs service worker) --------------------------------
+const MIME = { js: 'text/javascript', mjs: 'text/javascript', json: 'application/json',
+  glb: 'model/gltf-binary', gltf: 'model/gltf+json', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  png: 'image/png', webp: 'image/webp', svg: 'image/svg+xml', html: 'text/html', css: 'text/css' };
+const mimeFor = p => MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream';
+
+async function ensureZipfs() {
+  if (!('serviceWorker' in navigator)) {
+    throw new Error('this browser blocks service workers (private window?). Zip loading needs a normal window.');
+  }
+  await navigator.serviceWorker.register('./sw.js');
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller) {
+    await new Promise(res => {
+      const t = setTimeout(res, 1500);
+      navigator.serviceWorker.addEventListener('controllerchange', () => { clearTimeout(t); res(); }, { once: true });
+    });
+  }
+  if (!navigator.serviceWorker.controller) {
+    throw new Error('the zip filesystem worker did not take control — reload the page and drop the zip again.');
+  }
+}
+
+async function loadZipFile(f) {
+  status.textContent = `Reading ${f.name}…`;
+  if (zipState) unloadZip(false);
+  let entries;
+  try {
+    const { unzipSync } = await import('./vendor/fflate.module.js');
+    entries = unzipSync(new Uint8Array(await f.arrayBuffer()));
+  } catch (err) {
+    status.textContent = `Could not read ${f.name}: ${err.message}`;
+    return;
+  }
+  // Drop folder records and macOS zip junk.
+  let files = Object.entries(entries).filter(([p]) =>
+    !p.endsWith('/') && !p.startsWith('__MACOSX/') &&
+    !p.split('/').pop().startsWith('._') && !p.endsWith('.DS_Store'));
+  // Unwrap the single top-level folder that Finder's Compress creates.
+  const roots = new Set(files.map(([p]) => p.split('/')[0]));
+  const prefix = (roots.size === 1 && files.every(([p]) => p.includes('/'))) ? [...roots][0] + '/' : '';
+  files = files.map(([p, data]) => [p.slice(prefix.length), data]).filter(([p]) => p);
+
+  let entry = files.find(([p]) => p === 'component.js')?.[0];
+  if (!entry) {
+    const cands = files.filter(([p]) => p.endsWith('.component.js'));
+    if (cands.length === 1) entry = cands[0][0];
+  }
+  if (!entry) {
+    status.textContent = `${f.name}: no component.js found at the top of the zip (see the README's packaging section).`;
+    return;
+  }
+
+  try { await ensureZipfs(); }
+  catch (err) { status.textContent = `Zip loading unavailable: ${err.message}`; return; }
+
+  const id = 'z' + Date.now().toString(36);
+  const base = new URL(`zipfs/${id}/`, location.href).href;
+  const cache = await caches.open('zipfs');
+  for (const k of await cache.keys()) cache.delete(k);
+  await Promise.all(files.map(([p, data]) =>
+    cache.put(base + p, new Response(data, { headers: { 'Content-Type': mimeFor(p) } }))));
+
+  status.textContent = `Loading ${f.name}…`;
+  try {
+    const mod = await import(base + entry);
+    zipState = { label: f.name, savedHTML: null, savedValue: null, icons: null };
+    await activateComponent(mod, f.name, base);
+    if (!zipState.icons) swapDropdown(f.name, []);   // non-pack zip: still offer the unload entry
+  } catch (err) {
+    status.textContent = `Could not load ${f.name}: ${err.message}`;
+    console.error(err);
+    unloadZip(false);
+  }
 }
 
 function frameComponent(api) {
@@ -566,7 +709,7 @@ async function loadComponentFile(f) {
   }
 }
 
-$('compChip').onclick = () => unloadComponent(true);
+$('compChip').onclick = () => { if (zipState) unloadZip(true); else unloadComponent(true); };
 
 // --- model loading -----------------------------------------------------------
 function refreshStatus() {
@@ -574,13 +717,16 @@ function refreshStatus() {
   const sc = overrideMats.size
     ? ($('ovToggle').checked ? ` • sidecar ${sidecarName} ON` : ` • sidecar ${sidecarName} off (as exported)`)
     : (sidecarSpec ? ` • sidecar ${sidecarName} matches no meshes` : '');
-  const comp = component ? ` • component ${component.name} (${component.kind})` : '';
+  const comp = component
+    ? (zipState ? ` • zip ${zipState.label}` : ` • component ${component.name} (${component.kind})`)
+    : '';
   const shown = component?.kind === 'object' ? component.name : baseLabel;
   status.textContent = `${shown} • drag to orbit, wheel/pinch to zoom` + comp +
     (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
 
 function setModel(gltf, label) {
+  if (zipState) unloadZip(false);   // loading a model exits zip mode
   unloadComponent();   // a fresh model starts clean; reload the component after if wanted
   if (current) { pivot.remove(current); current.traverse(o => { o.geometry?.dispose?.(); }); }
   mixer = null;
@@ -620,6 +766,9 @@ pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Re
 
 const modelSelect = $('modelSelect');
 modelSelect.onchange = () => {
+  const v = modelSelect.value;
+  if (v === '__unloadzip__') { unloadZip(true); return; }
+  if (v.startsWith('zipicon:')) { activatePackIcon(v.slice(8)); return; }
   const opt = modelSelect.selectedOptions[0];
   if (opt.dataset.sidecar) loadSidecarURL(opt.dataset.sidecar);
   loadURL(opt.value, opt.textContent);
@@ -646,6 +795,8 @@ function selectCustom(name, sourceTag, value) {
 // Accepts any mix of one model file and one sidecar .json, in one gesture.
 async function handleFiles(files) {
   const list = [...files];
+  const zip = list.find(f => f.name.toLowerCase().endsWith('.zip'));
+  if (zip) { loadZipFile(zip); return; }   // a zip is a complete package: exclusive
   const json = list.find(f => f.name.toLowerCase().endsWith('.json'));
   const model = list.find(f => /\.(glb|gltf)$/i.test(f.name));
   const js = list.find(f => f.name.toLowerCase().endsWith('.js'));

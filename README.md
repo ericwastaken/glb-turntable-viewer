@@ -130,6 +130,52 @@ from its own address (relative paths) or from files you explicitly pick or
 drop — never from remote URLs — so nothing can run without you choosing it.
 Only load component files from people you trust.
 
+## Icon packs (zip): the no-tools workflow for designers
+
+A whole package — multiple icons, each with its own code and assets — travels
+as **one zip you drag onto the page**. No server, no build tools, no editing
+code. Under the hood the viewer unzips in the browser (self-hosted fflate) and
+serves the contents from a tiny service worker, so the package's relative
+imports and asset paths work untouched; nothing is uploaded anywhere.
+
+**Zip layout:**
+
+```
+my-icons.zip
+├── component.js       ← the universal pack loader: copy components/pack.component.js, never edit it
+├── icons.json         ← {"icons": ["nameA", "nameB"]} — the only file you maintain
+└── icons/
+    ├── nameA/
+    │   ├── src/       ← the icon's code (index.js must have the standard exports below)
+    │   └── assets/    ← that icon's model + textures
+    └── nameB/ ...
+```
+
+**Standard exports** — each icon's `icons/<name>/src/index.js` must export
+(aliases of its own functions are fine):
+
+| export | required | what it is |
+|---|---|---|
+| `createIconObject({ geometry, textures, srgbOutput })` | yes | builds and returns the icon (an Object3D or `{ group }`) |
+| `loadIconGeometry({ path })` | yes | loads the icon's geometry from `path` |
+| `loadIconTextures({ path, renderer })` | no | loads the icon's textures |
+| `IconController` | no | motion/animation controller with `update(dt)` |
+| `LAYOUT` | no | `{ iconHeightFraction, verticalCenter }` framing |
+
+**When a zip is loaded, the model dropdown switches to the pack's icons**,
+plus an "⏏ Unload zip" entry that restores the bundled samples. Loading any
+other model or a new zip also exits the pack.
+
+Adding an icon to an existing pack: drop its folder under `icons/`, add its
+name to `icons.json`, right-click → Compress, drag the new zip onto the page.
+
+The trust note above applies doubly to zips: the pack runs real code —
+only load packs from people you trust.
+
+Works on any static host (GitHub Pages included) and localhost. Requires a
+normal browser window — some private windows block service workers, and the
+viewer will say so rather than fail silently.
+
 ## Known limits (deliberate; it's a proof of concept)
 
 - No Draco/meshopt decoders: use uncompressed GLB files, or add `DRACOLoader`
