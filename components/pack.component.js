@@ -29,8 +29,12 @@ async function buildIcon(ctx, name) {
     mod.loadIconTextures ? mod.loadIconTextures({ path, renderer: ctx.renderer }) : Promise.resolve(undefined),
   ]);
 
-  // srgbOutput: true — the viewer's renderer encodes sRGB output.
-  const icon = mod.createIconObject({ geometry, textures, srgbOutput: true });
+  // srgbOutput: false — the viewer renders straight to the canvas with no
+  // post-processing (no EffectComposer/OutputPass), and three.js applies no
+  // sRGB encode to raw ShaderMaterials on its own. An icon that pre-inverts
+  // for a downstream encode would come out darker here, so we ask for
+  // display-ready output.
+  const icon = mod.createIconObject({ geometry, textures, srgbOutput: false });
   const object = icon.group ?? icon;   // factories may return { group } or an Object3D
 
   let controller = null;
