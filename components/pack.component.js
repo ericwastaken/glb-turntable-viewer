@@ -12,10 +12,24 @@
 //
 // Pack layout:
 //   component.js          this file (never changes)
-//   icons.json            {"icons": ["nameA", "nameB", ...]}
+//   icons.json            {"icons": ["nameA", "nameB", ...],
+//                          "background": "backgrounds/sky.jpg",      optional, pack-wide
+//                          "backgrounds": {"nameB": "backgrounds/alt.jpg"}}  optional, per icon
 //   icons/<name>/src/index.js + icons/<name>/assets/...
+//   backgrounds/...       optional images referenced above (or use a CSS color string)
+//
+// If an icon's IconController has pointerDown/pointerMove/pointerUp, the viewer
+// routes drags to it (the icon spins, the camera and backdrop stay put).
 
-async function buildIcon(ctx, name) {
+// A background entry is a relative image path or a CSS color ("#05061a").
+function resolveBackground(v) {
+  if (!v) return undefined;
+  if (typeof v === 'object') return { ...v, image: v.image ? new URL(v.image, import.meta.url).href : undefined };
+  const isColor = /^(#|rgb|hsl)/i.test(v.trim()) || /^[a-z]+$/i.test(v.trim());
+  return isColor ? { color: v } : { image: new URL(v, import.meta.url).href };
+}
+
+async function buildIcon(ctx, name, background) {
   const base = new URL(`./icons/${name}/`, import.meta.url);
   const mod = await import(new URL('src/index.js', base).href);
 
@@ -47,9 +61,17 @@ async function buildIcon(ctx, name) {
     ? { heightFraction: mod.LAYOUT.iconHeightFraction, verticalCenter: mod.LAYOUT.verticalCenter }
     : undefined;
 
+  const pointer = controller && typeof controller.pointerDown === 'function' ? {
+    down: (x, y) => controller.pointerDown(x, y),
+    move: (x, y) => controller.pointerMove?.(x, y),
+    up: () => controller.pointerUp?.(),
+  } : undefined;
+
   return {
     object,
     framing,
+    background,
+    pointer,
     update(dt) {
       if (controller) { controller.update(dt); icon.update?.(dt, controller); }
       else icon.update?.(dt);
@@ -60,11 +82,12 @@ async function buildIcon(ctx, name) {
 
 export async function createComponent(ctx) {
   const manifestUrl = new URL('./icons.json', import.meta.url);
-  let names;
+  let names, manifest;
   try {
     const res = await fetch(manifestUrl);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    names = (await res.json()).icons;
+    manifest = await res.json();
+    names = manifest.icons;
   } catch (err) {
     throw new Error(`Could not read icons.json next to component.js (${err.message}). It should contain e.g. {"icons": ["myicon"]}.`);
   }
@@ -74,7 +97,12 @@ export async function createComponent(ctx) {
 
   // Always return the icons map — the viewer lists them in its dropdown
   // (even a single icon shows by name, with an unload entry).
+  const packBg = resolveBackground(manifest.background);
+  const perIcon = manifest.backgrounds || {};
   const icons = {};
-  for (const name of names) icons[name] = () => buildIcon(ctx, name);
+  for (const name of names) {
+    const bg = resolveBackground(perIcon[name]) ?? packBg;
+    icons[name] = () => buildIcon(ctx, name, bg);
+  }
   return { icons };
 }

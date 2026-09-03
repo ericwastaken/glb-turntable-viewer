@@ -12,6 +12,9 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     color: #cfd6ea;
   }
+  /* Backdrop is a 2D layer behind the transparent canvas (never scene geometry),
+     so camera moves can't shift it — the same layering a real page uses. */
+  #bg { position: fixed; inset: 0; background: center / cover no-repeat; }
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
 
@@ -80,7 +83,8 @@
      the turntable and sidecar controls are hidden — the dropdown carries the
      pack's icons plus its own unload entry. */
   body.zipmode #pivotWrap, body.zipmode #spinWrap, body.zipmode #pauseBtn,
-  body.zipmode #sidecarBtn, body.zipmode #ovWrap, body.zipmode #compChip {
+  body.zipmode #sidecarBtn, body.zipmode #ovWrap, body.zipmode #compChip,
+  body.zipmode #starsWrap, body.zipmode #bgChip {
     display: none !important;
   }
 
@@ -109,6 +113,7 @@
 </style>
 </head>
 <body>
+<div id="bg"></div>
 <div id="app"></div>
 
 <div id="hud">
@@ -122,7 +127,7 @@
     <option value="models/DispersionTest.glb">Dispersion test (prism glass)</option>
     <option value="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
   </select>
-  <label class="file">Load .glb / .json / .js / .zip…<input type="file" id="filePick" accept=".glb,.gltf,.json,.js,.zip" multiple></label>
+  <label class="file">Load .glb / .json / .js / .zip / image…<input type="file" id="filePick" accept=".glb,.gltf,.json,.js,.zip,.png,.jpg,.jpeg,.webp" multiple></label>
   <span class="grp" id="pivotWrap">Pivot
     <select id="pivotSelect" title="Vertical axis the model spins around">
       <option value="center">Center (bounding box)</option>
@@ -135,6 +140,8 @@
   <label class="grp" id="ovWrap" style="display:none" title="Toggle the loaded sidecar's material settings">
     <input type="checkbox" id="ovToggle" checked> Apply sidecar settings
   </label>
+  <label class="grp" id="starsWrap" title="Default starfield backdrop (NASA/JPL-Caltech Spitzer image, public domain)"><input type="checkbox" id="starsToggle" checked> Stars</label>
+  <button id="bgChip" style="display:none" title="Remove the custom background"><span id="bgName"></span> ✕</button>
   <button id="compChip" style="display:none" title="Unload the custom component"><span id="compName"></span> ✕</button>
   <span id="links">
     <a href="https://github.com/ericwastaken/glb-turntable-viewer" target="_blank" rel="noopener">
@@ -159,7 +166,7 @@
 </div>
 
 <div id="status">Loading…</div>
-<div id="drop">Drop .glb, sidecar .json, component .js, or icon-pack .zip anywhere</div>
+<div id="drop">Drop .glb, sidecar .json, component .js, icon-pack .zip, or a background image anywhere</div>
 
 <script type="importmap">
 {
@@ -209,25 +216,30 @@ const key = new THREE.DirectionalLight(0xffffff, 1.2);
 key.position.set(3, 5, 4);
 scene.add(key);
 
-// Simple procedural starfield backdrop: generated in code (random points),
-// plain white/gray stars on a neutral charcoal sky. Not derived from any asset.
-{
-  const N = 700, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) {
-    const r = 22 + Math.random() * 18;
-    const t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
-    pos.set([r * Math.sin(p) * Math.cos(t), r * Math.cos(p), r * Math.sin(p) * Math.sin(t)], i * 3);
-    const v = 0.55 + Math.random() * 0.45;   // white to soft gray, no color
-    col.set([v, v, v], i * 3);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const stars = new THREE.Points(g, new THREE.PointsMaterial({
-    size: 0.09, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.85,
-  }));
-  scene.add(stars);
+// --- background layer --------------------------------------------------------
+// The backdrop lives in #bg behind the transparent canvas. Default image:
+// backgrounds/starfield-default.jpg — a crop of NASA/JPL-Caltech's Spitzer
+// Milky Way mosaic (PIA13932), public domain; see README for credit.
+const DEFAULT_BG = './backgrounds/starfield-default.jpg';
+const bgEl = $('bg');
+const bgState = { stars: true, custom: null, customName: '' };   // the user's choice
+let componentBg = null;                                          // a loaded component/pack's choice wins
+function applyBackground() {
+  const bg = componentBg
+    ?? (bgState.custom ? { image: bgState.custom } : (bgState.stars ? { image: DEFAULT_BG } : null));
+  bgEl.style.backgroundImage = bg?.image ? `url("${bg.image}")` : 'none';
+  bgEl.style.backgroundColor = bg?.color ?? 'transparent';
 }
+function setCustomBackground(url, name) {
+  if (bgState.custom?.startsWith('blob:')) URL.revokeObjectURL(bgState.custom);
+  bgState.custom = url || null; bgState.customName = name || '';
+  $('bgName').textContent = name || '';
+  $('bgChip').style.display = url ? 'inline-block' : 'none';
+  applyBackground();
+}
+$('starsToggle').onchange = e => { bgState.stars = e.target.checked; applyBackground(); };
+$('bgChip').onclick = () => setCustomBackground(null, '');
+applyBackground();
 
 // --- model + pivot ----------------------------------------------------------
 // The model is parented under a pivot group at the world origin. The spin is
@@ -493,14 +505,44 @@ $('docsBtn').onclick = () =>
 // picks/drops. Cross-origin URLs are rejected.
 let component = null;   // { name, api, kind: 'object' | 'material' }
 
-function unloadComponent(reloadModel = false) {
+// Components may take over pointer input (e.g. a pack icon's own drag/spin
+// controller). While attached, OrbitControls stops rotating the camera (zoom
+// stays) and pointer events go to the component instead.
+let pointerListeners = null;
+function attachPointer(p) {
+  detachPointer();
+  controls.enableRotate = false;
+  const el = renderer.domElement;
+  const down = e => { if (e.button !== undefined && e.button !== 0) return; p.down?.(e.clientX, e.clientY); el.setPointerCapture?.(e.pointerId); };
+  const move = e => p.move?.(e.clientX, e.clientY);
+  const up = () => p.up?.();
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  pointerListeners = { down, move, up };
+}
+function detachPointer() {
+  if (!pointerListeners) return;
+  const el = renderer.domElement;
+  el.removeEventListener('pointerdown', pointerListeners.down);
+  el.removeEventListener('pointermove', pointerListeners.move);
+  el.removeEventListener('pointerup', pointerListeners.up);
+  el.removeEventListener('pointercancel', pointerListeners.up);
+  pointerListeners = null;
+  controls.enableRotate = true;
+}
+
+function unloadComponent(reloadModel = false, keepBackground = false) {
   if (!component) return;
   try { component.api.dispose?.(); } catch (e) { console.warn('component dispose:', e); }
   if (component.kind === 'object' && component.api.object) pivot.remove(component.api.object);
   if (component.kind === 'material' && current) {
     current.traverse(o => { if (o.isMesh && originalMats.has(o)) o.material = originalMats.get(o); });
   }
+  detachPointer();
   component = null;
+  if (!keepBackground) { componentBg = null; applyBackground(); }
   $('compChip').style.display = 'none';
   refreshStatus();
   if (reloadModel) modelSelect.onchange();
@@ -521,6 +563,9 @@ function applyComponentApi(api, name) {
     status.textContent = `Component ${name}: createComponent() must return { object }, { material }, or { icons }.`;
     return false;
   }
+  componentBg = api.background ?? null;   // { image?, color? } — a component may bring its backdrop
+  applyBackground();
+  if (api.pointer) attachPointer(api.pointer);
   $('compName').textContent = name;
   $('compChip').style.display = 'inline-block';
   refreshStatus();
@@ -584,7 +629,7 @@ async function enterPack(label, icons) {
 }
 
 async function activatePackIcon(name) {
-  unloadComponent();
+  unloadComponent(false, true);   // keep the backdrop while switching icons (no flash)
   status.textContent = `Loading ${name}…`;
   let api;
   try { api = await zipState.icons[name](); }
@@ -751,7 +796,8 @@ function refreshStatus() {
     ? (zipState ? ` • zip ${zipState.label}` : ` • component ${component.name} (${component.kind})`)
     : '';
   const shown = component?.kind === 'object' ? component.name : baseLabel;
-  status.textContent = `${shown} • drag to orbit, wheel/pinch to zoom` + comp +
+  const drag = component?.api.pointer ? 'drag to spin the icon' : 'drag to orbit';
+  status.textContent = `${shown} • ${drag}, wheel/pinch to zoom` + comp +
     (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
 
@@ -830,6 +876,8 @@ async function handleFiles(files) {
   const json = list.find(f => f.name.toLowerCase().endsWith('.json'));
   const model = list.find(f => /\.(glb|gltf)$/i.test(f.name));
   const js = list.find(f => f.name.toLowerCase().endsWith('.js'));
+  const img = list.find(f => /\.(png|jpe?g|webp)$/i.test(f.name));
+  if (img) setCustomBackground(URL.createObjectURL(img), img.name);
   if (json) {
     try {
       const res = lintSidecar(await json.text());
@@ -863,6 +911,14 @@ addEventListener('drop', e => {
 // The sidecar is never assumed from the model name — it must be passed.
 let pendingComponentPath = params.get('component');
 (async () => {
+  const bgp = params.get('bg');
+  if (bgp) {
+    try {
+      const u = new URL(bgp, location.href);
+      if (u.origin === location.origin) setCustomBackground(u.href, bgp.split('/').pop());
+      else status.textContent = 'Backgrounds only load from this site\'s own address (a relative path).';
+    } catch { status.textContent = `Bad background path: ${bgp}`; }
+  }
   const sc = params.get('sidecar');
   if (sc) await loadSidecarURL(sc);
   const qs = params.get('model');
@@ -893,7 +949,7 @@ addEventListener('resize', () => {
 });
 
 // Debug handle for console experiments (material tweaks, inspection).
-window.viewer = { THREE, scene, camera, renderer, pivot, get model() { return current; } };
+window.viewer = { THREE, scene, camera, renderer, pivot, controls, get model() { return current; }, get component() { return component; } };
 </script>
 </body>
 </html>
