@@ -269,8 +269,8 @@ See §14 for why your copy must stay unedited.
 ```
 my-pack.zip
 ├── component.js        ← copy of components/pack.component.js, unedited
-├── icons.json          ← the manifest
-├── backgrounds/        ← optional images referenced from icons.json
+├── icons.yml           ← the manifest
+├── backgrounds/        ← optional images referenced from icons.yml
 └── icons/
     ├── nameA/
     │   ├── src/index.js    ← the standard exports (below)
@@ -282,17 +282,19 @@ my-pack.zip
 cp components/pack.component.js my-pack/component.js
 ```
 
-### `icons.json`
+### `icons.yml`
 
-```json
-{
-  "icons": ["twist", "gem"],
-  "background": "backgrounds/dusk.jpg",
-  "backgrounds": { "gem": "backgrounds/alt.jpg" }
-}
+```yaml
+# Comments are fine — this is YAML.
+icons:
+  - twist
+  - gem
+background: backgrounds/dusk.jpg          # optional, pack-wide
+backgrounds:                              # optional, per icon
+  gem: backgrounds/alt.jpg
 ```
 
-- `icons` — **required**, non-empty array of folder names under `icons/`. An
+- `icons` — **required**, non-empty list of folder names under `icons/`. An
   icon folder not listed here is never loaded.
 - `background` — optional, pack-wide. Either a path inside the zip, or a CSS
   color. `resolveBackground()` treats a value as a color if it matches
@@ -302,6 +304,16 @@ cp components/pack.component.js my-pack/component.js
   `background`.
 
 Keep background images web-sized — roughly a 2732-px-tall JPEG at quality ~80.
+
+The loader parses the manifest with the vendored `js-yaml` (imported through
+the page's import map, the same way icon modules import `three`).
+
+> **Deprecated: `icons.json`.** Older packs used a JSON manifest with the same
+> keys. It still loads today, with a console warning, and **will be unsupported
+> in a future version.** Migrate by renaming the file to `icons.yml` — YAML is a
+> superset of JSON, so the existing content is already valid. `validate-pack.py`
+> warns on an `icons.json` and, if both files are present, tells you the JSON is
+> being ignored.
 
 ### Standard exports (`icons/<name>/src/index.js`)
 
@@ -481,7 +493,7 @@ Then drop the real zip, in a real browser window, and assert additionally:
 
 ```js
 (await (await caches.open('zipfs')).keys()).map(r => r.url);
-// .../zipfs/<id>/component.js, .../icons.json, .../icons/<name>/src/index.js, …
+// .../zipfs/<id>/component.js, .../icons.yml, .../icons/<name>/src/index.js, …
 navigator.serviceWorker.controller;                            // non-null
 ```
 
@@ -524,7 +536,7 @@ viewport and confirm the subject is still in frame — see §10.4.
 | **"It renders dark"** and you pre-inverted for an sRGB encode | There is no post-processing pass; nothing encodes your raw shader output | §10.6, §11 |
 | **"Off-frame on a phone."** Subject looks fine on the dev machine, cropped on a device | `setSize(w, h, false)` in a harness, or CSS size not set — canvas lays out at backing-store size on DPR ≥ 2 | §10.4 |
 | **"My pack didn't load."** Dropdown never switched | Entry point missing or ambiguous (needs `component.js` at the root, or exactly one `*.component.js`) | §7 — *How a zip is actually loaded*, step 4 |
-| **"One of my icons is missing."** The folder is in the zip | `icons.json` drives the list, not the folder contents | §10.9 |
+| **"One of my icons is missing."** The folder is in the zip | `icons.yml` drives the list, not the folder contents | §10.9 |
 | **"Nothing animates in my test"** but it looks fine in a real window | `requestAnimationFrame` is paused in a hidden/headless pane | §10.1 |
 | **"Nothing animates"** in a real window either | Your `update` is throwing; the loop catches and keeps going | §6, §10.8 — read `console.error` |
 | **"The zip drop does nothing."** Status mentions ServiceWorker registration | Service workers blocked in this browsing context | §10.2 — use a normal window, or preview via `?component=` |
@@ -613,12 +625,12 @@ viewport and confirm the subject is still in frame — see §10.4.
    how the pack arrived.
 
 8. **The status line is the error channel.** Almost nothing throws to the
-   user — bad component, bad sidecar, missing `icons.json`, blocked service
+   user — bad component, bad sidecar, missing `icons.yml`, blocked service
    worker all end up as text in `#status`, sometimes with the real error only
    in `console.error`. Read both.
 
-9. **`icons.json` drives the icon list, not the folder contents.** An icon
-   folder present in the zip but missing from `icons.json` is silently
+9. **`icons.yml` drives the icon list, not the folder contents.** An icon
+   folder present in the zip but missing from `icons.yml` is silently
    ignored. `validate-pack.py` warns about this.
 
 10. **Vendored three.js is minified.** `vendor/three.module.min.js` is not
@@ -692,6 +704,7 @@ vendor/
   environments/RoomEnvironment.js
   utils/BufferGeometryUtils.js
   fflate.module.js             in-browser unzip
+  js-yaml.esm.min.mjs          YAML parser for pack manifests (icons.yml), MIT
 models/*.glb                   7 Khronos sample models
 backgrounds/starfield-default.jpg   default backdrop (synthetic, 4096x2732)
 sidecars/example-emerald-glass.json example sidecar
@@ -730,7 +743,7 @@ Where to look when the docs above are not enough:
 
 **Your copy of the pack loader must stay unedited.** A pack contains a copy of
 `components/pack.component.js` as its `component.js`. It is the same file in
-every pack; all pack-specific behaviour belongs in `icons.json` and the
+every pack; all pack-specific behaviour belongs in `icons.yml` and the
 per-icon modules. `validate-pack.py` compares your copy against the repo's and
 reports a drifted copy as an error, so an edited copy will not validate. If you
 find yourself wanting to change it, the change belongs in your icon module.

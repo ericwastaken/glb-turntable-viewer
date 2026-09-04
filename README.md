@@ -98,7 +98,7 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 | Path | What |
 |---|---|
 | `index.html` | The whole page (markup, styles, and module script). |
-| `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment, self-hosted. |
+| `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment; fflate (MIT) for zips; js-yaml 5.4.1 (MIT) for pack manifests. All self-hosted. |
 | `backgrounds/` | `starfield-default.jpg` — synthetic starfield (generated, 4096×2732), the default backdrop. |
 | `models/` | Sample models from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets): glass/transmission tests (DragonAttenuation, MosquitoInAmber, GlassVaseFlowers, GlassHurricaneCandleHolder, IridescentDishWithOlives, DispersionTest) plus DamagedHelmet (PBR). |
 
@@ -202,7 +202,7 @@ imports and asset paths work untouched; nothing is uploaded anywhere.
 
 Download
 [`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
-(5.4 KB — two procedural icons plus the pack's own background; no per-icon
+(5.6 KB — two procedural icons plus the pack's own background; no per-icon
 asset files) and drag it onto
 [the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
 dropdown switches to the pack's icons ("twist" and "gem") plus an
@@ -218,8 +218,8 @@ icon (two required exports); `icons/gem` adds the optional motion controller.
 ```
 my-icons.zip
 ├── component.js       ← the universal pack loader: copy components/pack.component.js, never edit it
-├── icons.json         ← {"icons": ["nameA", "nameB"], "background": "backgrounds/sky.jpg"}
-├── backgrounds/       ← optional images referenced from icons.json
+├── icons.yml          ← icons: [nameA, nameB]   background: backgrounds/sky.jpg
+├── backgrounds/       ← optional images referenced from icons.yml
 └── icons/
     ├── nameA/
     │   ├── src/       ← the icon's code (index.js must have the standard exports below)
@@ -249,17 +249,26 @@ Each icon's `icons/<name>/src/index.js` must export
    the standard exports (table above) and, if it loads files, an `assets/`
    folder next to it. Start from
    [`components/example-pack/icons/`](components/example-pack/icons/).
-3. List the icon folder names in `icons.json`:
-   `{"icons": ["nameA", "nameB"]}`.
+3. List the icon folder names in `icons.yml`:
+   ```yaml
+   icons:
+     - nameA
+     - nameB
+   ```
 4. Right-click the pack folder → **Compress** (macOS) / **Send to →
    Compressed folder** (Windows).
 
 ### Backgrounds in a pack
 
-Add `"background": "backgrounds/sky.jpg"` to `icons.json` (an image path inside
+Add `background: backgrounds/sky.jpg` to `icons.yml` (an image path inside
 the zip, or a CSS color like `"#05061a"`) for a pack-wide backdrop, and
-optionally `"backgrounds": {"nameB": "backgrounds/alt.jpg"}` for per-icon
-overrides. The viewer shows it while the pack is loaded and restores its own on
+optionally per-icon overrides:
+
+```yaml
+backgrounds:
+  nameB: backgrounds/alt.jpg
+```
+ The viewer shows it while the pack is loaded and restores its own on
 unload. Keep images web-sized: a 2732-px-tall JPEG (tablet height) at quality
 ~80 stays under 1 MB for most starfields. The example pack ships one
 (`backgrounds/dusk.jpg`).
@@ -279,7 +288,11 @@ route behaves the same way (same icon dropdown, same hidden controls); the zip
 is simply what makes the pack portable.
 
 Adding an icon to an existing pack: drop its folder under `icons/`, add its
-name to `icons.json`, re-compress, drag the new zip onto the page.
+name to `icons.yml`, re-compress, drag the new zip onto the page.
+
+**Deprecated: `icons.json`.** Older packs used a JSON manifest with the same
+keys. It still loads today (with a console warning) and will be unsupported in
+a future version — rename it to `icons.yml`; the content is already valid YAML.
 
 The trust note above applies doubly to zips: the pack runs real code —
 only load packs from people you trust.

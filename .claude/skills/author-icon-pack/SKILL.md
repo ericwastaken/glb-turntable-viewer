@@ -1,6 +1,6 @@
 ---
 name: author-icon-pack
-description: Build, validate, and test an icon-pack ZIP for this viewer — the icons.json manifest, the standard per-icon exports (createIconObject / loadIconGeometry / loadIconTextures / IconController / LAYOUT), packaging, and the zipfs service-worker path. Use when asked to create, fix, extend, or validate a pack or the zip drag-drop workflow.
+description: Build, validate, and test an icon-pack ZIP for this viewer — the icons.yml manifest, the standard per-icon exports (createIconObject / loadIconGeometry / loadIconTextures / IconController / LAYOUT), packaging, and the zipfs service-worker path. Use when asked to create, fix, extend, or validate a pack or the zip drag-drop workflow.
 ---
 
 # Authoring an icon pack
@@ -19,7 +19,7 @@ Spec reference: `AGENT.md` §7. Working example: `components/example-pack/`
 ```
 my-pack/
 ├── component.js        ← EXACT copy of components/pack.component.js. Never edit.
-├── icons.json
+├── icons.yml
 ├── backgrounds/        ← optional
 └── icons/
     ├── nameA/
@@ -33,20 +33,26 @@ cp components/pack.component.js my-pack/component.js
 ```
 
 The loader is the same file in every pack — all pack-specific behaviour lives
-in `icons.json` and the per-icon modules. If you find yourself wanting to edit
+in `icons.yml` and the per-icon modules. If you find yourself wanting to edit
 it, the change belongs in your icon module: `validate-pack.py` compares your
 copy against the repo's and reports a drifted copy as an error, so an edited
 copy will not validate (`AGENT.md` §14).
 
-## Step 2 — write `icons.json`
+## Step 2 — write `icons.yml`
 
-```json
-{
-  "icons": ["nameA", "nameB"],
-  "background": "backgrounds/dusk.jpg",
-  "backgrounds": { "nameB": "#05061a" }
-}
+```yaml
+# YAML: comments allowed, no trailing-comma trouble.
+icons:
+  - nameA
+  - nameB
+background: backgrounds/dusk.jpg
+backgrounds:
+  nameB: "#05061a"
 ```
+
+(`icons.json` with the same keys is **deprecated** — it still loads with a
+console warning and will be unsupported in a future version. Rename it to
+`icons.yml`; the JSON is already valid YAML.)
 
 - `icons` — **required**, non-empty, and it is what drives the dropdown. A
   folder under `icons/` that is not listed here is silently ignored.

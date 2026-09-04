@@ -123,7 +123,7 @@ document.getElementById('speed').value;                       // '0'
 [...document.getElementById('modelSelect').options].map(o => o.value);
 // ['zipicon:twist', 'zipicon:gem', '__unloadzip__']
 (await (await caches.open('zipfs')).keys()).map(r => r.url);
-// .../zipfs/<id>/component.js, .../icons.json, .../icons/<name>/src/index.js, …
+// .../zipfs/<id>/component.js, .../icons.yml, .../icons/<name>/src/index.js, …
 navigator.serviceWorker.controller;                            // non-null
 ```
 
@@ -144,7 +144,7 @@ document.getElementById('modelSelect').onchange();
 ## 6. Always read the status line and the console
 
 Almost nothing in this app throws to the user. Bad component, invalid sidecar,
-missing `icons.json`, blocked service worker, failed model load — all of it
+missing `icons.yml`, blocked service worker, failed model load — all of it
 lands as text in `#status`, often with the real error only in `console.error`.
 
 ```js

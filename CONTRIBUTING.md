@@ -16,8 +16,8 @@ agent-facing contracts live in [`AGENT.md`](AGENT.md).
   transpiler. Editing a file is deploying it, and the repo is published as-is
   to a static host.
 - **Dependencies are vendored, not fetched.** Everything third-party sits under
-  `vendor/` — three.js r170 (MIT) and a few of its example modules, plus
-  fflate for in-browser unzip. The page resolves `three` through an import map
+  `vendor/` — three.js r170 (MIT) and a few of its example modules, fflate
+  (MIT) for in-browser unzip, and js-yaml 5.4.1 (MIT) for pack manifests. The page resolves `three` through an import map
   in `index.html` and makes no cross-origin request at runtime. If a dependency
   is added, the pattern that matches the existing ones is: drop the file under
   `vendor/`, add its import-map entry, and add a row to the `Files` table in

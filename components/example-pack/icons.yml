@@ -1,0 +1,15 @@
+# icons.yml — the pack manifest. Comments are welcome; this is YAML.
+# Each name under `icons:` is a folder under icons/ with a src/index.js that
+# has the standard exports (createIconObject, loadIconGeometry, ...).
+icons:
+  - twist
+  - gem
+
+# Optional pack-wide backdrop: an image path inside the pack, or a CSS colour
+# such as "#05061a". Keep images web-sized (~2732 px tall, JPEG q≈80).
+background: backgrounds/dusk.jpg
+
+# Optional per-icon overrides, same value rules; anything unlisted falls back
+# to `background`.
+# backgrounds:
+#   gem: "#05061a"

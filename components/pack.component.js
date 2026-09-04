@@ -1,8 +1,9 @@
 // component.js — UNIVERSAL icon-pack loader for the GLB Turntable Viewer.
 // This file is always the same, for every pack. Do not edit it.
 //
-// It reads icons.json (a list of folder names under icons/) and drives each
-// icon through the standard exports every icon's src/index.js provides:
+// It reads icons.yml (the manifest: folder names under icons/, plus optional
+// backgrounds) and drives each icon through the standard exports every icon's
+// src/index.js provides:
 //
 //   createIconObject({ geometry, textures, srgbOutput })   required
 //   loadIconGeometry({ path })                             required
@@ -12,9 +13,11 @@
 //
 // Pack layout:
 //   component.js          this file (never changes)
-//   icons.json            {"icons": ["nameA", "nameB", ...],
-//                          "background": "backgrounds/sky.jpg",      optional, pack-wide
-//                          "backgrounds": {"nameB": "backgrounds/alt.jpg"}}  optional, per icon
+//   icons.yml             icons: [nameA, nameB, ...]                    required
+//                         background: backgrounds/sky.jpg               optional, pack-wide
+//                         backgrounds: { nameB: backgrounds/alt.jpg }   optional, per icon
+//                         (an icons.json with the same keys still loads, but is
+//                          deprecated and will be unsupported in a future version)
 //   icons/<name>/src/index.js + icons/<name>/assets/...
 //   backgrounds/...       optional images referenced above (or use a CSS color string)
 //
@@ -80,19 +83,46 @@ async function buildIcon(ctx, name, background) {
   };
 }
 
-export async function createComponent(ctx) {
-  const manifestUrl = new URL('./icons.json', import.meta.url);
-  let names, manifest;
-  try {
-    const res = await fetch(manifestUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    manifest = await res.json();
-    names = manifest.icons;
-  } catch (err) {
-    throw new Error(`Could not read icons.json next to component.js (${err.message}). It should contain e.g. {"icons": ["myicon"]}.`);
+// The manifest is icons.yml. An icons.json still loads for now, with a console
+// warning: it is deprecated and will stop being read in a future version. YAML
+// is a superset of JSON, so renaming the file is normally the whole migration.
+// 'js-yaml' resolves through the page's import map exactly like 'three' does,
+// and is only imported when a YAML manifest is actually present.
+const EXAMPLE = 'It should contain e.g.\n\nicons:\n  - myicon';
+
+async function readManifest() {
+  const ymlUrl = new URL('./icons.yml', import.meta.url);
+  let res;
+  try { res = await fetch(ymlUrl); }
+  catch (err) { throw new Error(`Could not fetch icons.yml next to component.js (${err.message}).`); }
+  if (res.ok) {
+    const { load } = await import('js-yaml');
+    const text = await res.text();
+    let manifest;
+    try { manifest = load(text); }
+    catch (err) { throw new Error(`icons.yml is not valid YAML: ${err.message}`); }
+    return { file: 'icons.yml', manifest };
   }
+
+  const jsonUrl = new URL('./icons.json', import.meta.url);
+  let legacy;
+  try { legacy = await fetch(jsonUrl); } catch { legacy = null; }
+  if (legacy && legacy.ok) {
+    console.warn('[pack] icons.json is deprecated and will be unsupported in a future version. Rename it to icons.yml (the same keys work; YAML is a superset of JSON).');
+    let manifest;
+    try { manifest = await legacy.json(); }
+    catch (err) { throw new Error(`icons.json is not valid JSON: ${err.message}`); }
+    return { file: 'icons.json', manifest };
+  }
+
+  throw new Error(`Could not read icons.yml next to component.js (HTTP ${res.status}). ${EXAMPLE}`);
+}
+
+export async function createComponent(ctx) {
+  const { file, manifest } = await readManifest();
+  const names = manifest?.icons;
   if (!Array.isArray(names) || names.length === 0) {
-    throw new Error('icons.json has no icons listed. Expected e.g. {"icons": ["myicon"]}.');
+    throw new Error(`${file} has no icons listed. ${EXAMPLE}`);
   }
 
   // Always return the icons map — the viewer lists them in its dropdown
