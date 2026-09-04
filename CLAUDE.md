@@ -9,8 +9,8 @@ Quick orientation while you fetch it:
 
 - A single static page that spins a `.glb` on a turntable with self-hosted
   three.js (r170). Nothing to install, nothing to build, nothing uploaded.
-  The entire app is `index.html`; `sw.js` only serves the contents of a
-  dropped `.zip`.
+  The app is `index.html` plus `sequence.js` (loaded only when a pack has a
+  `sequence.yml`); `sw.js` only serves the contents of a dropped `.zip`.
 - **It must be served over HTTP** — ES modules, the import map, and the service
   worker all fail from `file://`:
 
@@ -24,8 +24,11 @@ Quick orientation while you fetch it:
   `AGENT.md` §8 and §10 before writing any timing-based check — a hidden
   browser pane pauses `requestAnimationFrame`, so waiting and then reading a
   rotation gives a false negative.
-- `AGENT.md` §11 lists what the viewer deliberately does not do; §12 notes that
-  a sequencing format is being designed but is not specified yet.
+- `AGENT.md` §11 lists what the viewer deliberately does not do; §12 is the
+  sequence format (`sequence.yml`, an icon pack's entrance choreography) —
+  it never owns spin, and it is verified with `viewer.sequence.seek(t)`, not
+  by waiting.
 
 Repeatable authoring workflows are packaged as skills under `.claude/skills/`:
-`author-sidecar`, `author-component`, `author-icon-pack`, `verify-in-browser`.
+`author-sidecar`, `author-component`, `author-icon-pack`, `author-sequence`,
+`verify-in-browser`.

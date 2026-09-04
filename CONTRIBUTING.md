@@ -9,16 +9,20 @@ agent-facing contracts live in [`AGENT.md`](AGENT.md).
 
 ## How the project is shaped right now
 
-- **The app is currently a single file.** All markup, CSS, and application
-  logic live in `index.html` (~980 lines). There is no bundler and no module
-  split. Sections are marked with `// --- name ---` banner comments.
+- **The app is essentially one file.** All markup, CSS, and application logic
+  live in `index.html` (~1,100 lines), plus one module, `sequence.js`, that
+  `index.html` imports on demand when a pack ships a `sequence.yml`. There is
+  no bundler. Sections are marked with `// --- name ---` banner comments.
 - **There is no build step.** No `package.json`, no lockfile, no CI config, no
   transpiler. Editing a file is deploying it, and the repo is published as-is
   to a static host.
 - **Dependencies are vendored, not fetched.** Everything third-party sits under
   `vendor/` — three.js r170 (MIT) and a few of its example modules, fflate
-  (MIT) for in-browser unzip, and js-yaml 5.4.1 (MIT) for pack manifests. The page resolves `three` through an import map
-  in `index.html` and makes no cross-origin request at runtime. If a dependency
+  (MIT) for in-browser unzip, js-yaml 5.4.1 (MIT) for pack manifests and
+  sequences, and Anime.js 4.5.0 (MIT) for sequence timelines (imported only
+  when a pack has a sequence). The page resolves `three`, `js-yaml` and
+  `animejs` through an import map in `index.html` and makes no cross-origin
+  request at runtime. If a dependency
   is added, the pattern that matches the existing ones is: drop the file under
   `vendor/`, add its import-map entry, and add a row to the `Files` table in
   `README.md` noting version and license.
@@ -74,6 +78,12 @@ that does not reach the example pack (and the rebuilt zip) will make
 `python3 .claude/tools/validate-pack.py components/example-pack` fail. The
 per-icon exports table appears in both `README.md` and `AGENT.md`, so a change
 to the loader's contract touches those too.
+
+**The sequence vocabulary lives in two places on purpose.** `sequence.js`
+enforces the channel names, element types, verbs and ease names at load;
+`validate-pack.py` repeats them as data (`LAYER_CHANNELS`, `ELEMENT_TYPES`,
+`ACTIONS`, `EASE_NAME`) so a pack can be checked without a browser. A change
+to one should be mirrored in the other, and in the tables in `AGENT.md` §12.
 
 ## The repo is public
 

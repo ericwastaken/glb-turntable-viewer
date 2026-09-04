@@ -46,6 +46,7 @@ Facts that shape everything you do with it:
 | Try material overrides on a model without touching the model | §5 — sidecars |
 | Write custom three.js code (a shader, custom geometry, your own motion) | §6 — components |
 | Preview or build a designer's multi-icon pack | §7 — icon packs |
+| Choreograph an icon's entrance — fade/scale in, lines of copy, a call-to-action | §12 — sequences |
 | Check that the thing you just authored actually works | §8 — verifying |
 | Explain why something looks wrong | §9 — troubleshooting by symptom |
 
@@ -185,6 +186,8 @@ return {
   framing,     // optional { heightFraction, verticalCenter }
   background,  // optional { image: url } or { color: '#05061a' }
   pointer,     // optional { down(x,y), move(x,y), up() }
+  setFade(v),  // optional; 0–1 opacity setter a sequence calls (§12)
+  sequence,    // optional { file, doc } — a parsed sequence.yml to play (§12)
 };
 ```
 
@@ -212,6 +215,11 @@ Verified specifics:
   coordinates. The status line switches to "drag to spin the icon".
 - **`{ icons: {…} }`** is the fourth return shape — see §7. It is checked
   before `object`/`material`.
+- **`sequence`** (only meaningful with `object`) makes the page wrap `object`
+  in a Group, frame it at rest, then play the sequence on that wrapper and a
+  2D overlay (§12). The stock pack loader sets it from the manifest; a
+  single-file component may set it too. `setFade(v)` is how the sequence fades
+  the object; without it the page fades standard materials itself (§12).
 - The **spin slider still applies** to a single-file component's `object` (the
   page rotates the pivot). A pack is different: it enters pack mode, which
   zeroes the slider — see §7.
@@ -270,6 +278,7 @@ See §14 for why your copy must stay unedited.
 my-pack.zip
 ├── component.js        ← copy of components/pack.component.js, unedited
 ├── icons.yml           ← the manifest
+├── sequence.yml        ← optional entrance choreography, named from icons.yml (§12)
 ├── backgrounds/        ← optional images referenced from icons.yml
 └── icons/
     ├── nameA/
@@ -292,10 +301,16 @@ icons:
 background: backgrounds/dusk.jpg          # optional, pack-wide
 backgrounds:                              # optional, per icon
   gem: backgrounds/alt.jpg
+sequence: sequence.yml                    # optional, entrance choreography (§12)
 ```
 
 - `icons` — **required**, non-empty list of folder names under `icons/`. An
   icon folder not listed here is never loaded.
+- `sequence` — optional path, relative to `component.js`, of a YAML file the
+  viewer plays as each icon's entrance (§12). The loader fetches and parses it
+  once and hands it to every icon as `api.sequence = { file, doc }`; the page
+  does the rest. No key → no sequence → the pack behaves exactly as before. A
+  missing or unparsable file fails the pack at load, in the status line.
 - `background` — optional, pack-wide. Either a path inside the zip, or a CSS
   color. `resolveBackground()` treats a value as a color if it matches
   `/^(#|rgb|hsl)/i` or is a single all-alpha word (`"black"`); anything else
@@ -338,6 +353,10 @@ Loader behaviour worth knowing (all in `buildIcon()`):
   `icon.update(dt, controller)`. With no controller it calls `icon.update(dt)`.
   So an icon's `update` signature is `(dt, controller?)`.
 - `dispose()` on your returned object is called on unload.
+- If your returned object has **`setFade(v)`** (0–1), the loader forwards it as
+  `api.setFade` so a sequence can fade the icon through your own material
+  (the only route for a raw `ShaderMaterial`). Standard-material icons need
+  nothing — the page fades them itself (§12).
 - **Icon modules may `import * as THREE from 'three'`** — the bare specifier
   resolves through the *page's* import map to `./vendor/three.module.min.js`,
   so every icon shares the viewer's single three.js instance. Both bundled
@@ -389,7 +408,10 @@ Stdlib Python 3, no install. It checks the entry module, that your
 `component.js` still matches the repo's copy, the manifest shape, that every
 listed icon has `src/index.js` exporting both required functions, that
 background paths exist in the pack, and warns about unlisted icon folders and
-oversized assets. Exit 0 = clean, 1 = errors, 2 = could not open.
+oversized assets. If the manifest names a `sequence`, it checks the file exists
+and validates its structure (§12) — **that part needs PyYAML** (`pip install
+pyyaml`); without it the validator says so in a warning and skips only the
+sequence. Exit 0 = clean, 1 = errors, 2 = could not open.
 
 ### Packaging
 
@@ -445,11 +467,14 @@ of a code read.
 
 ```js
 window.viewer = { THREE, scene, camera, renderer, pivot, controls,
-                  get model(), get component() };
+                  get model(), get component(), get sequence() };
 ```
 
-`viewer.component` is `{ name, api, kind }` where `kind` is `'object'` or
-`'material'` and `api` is exactly what `createComponent()` returned.
+`viewer.component` is `{ name, api, kind, root, seq }` where `kind` is
+`'object'` or `'material'`, `api` is exactly what `createComponent()` returned,
+`root` is what sits under the pivot (`api.object`, or the wrapper Group a
+sequence animates), and `seq` is the running sequence or `null`.
+`viewer.sequence` is the same `seq` (§12).
 
 ### Your component
 
@@ -511,6 +536,21 @@ Unloading is worth checking too (select `⏏ Unload …` in the dropdown):
 `unloadZip()` restores the saved dropdown and the exact row that was selected,
 the saved spin value, and the page's own background.
 
+### Your sequence
+
+Never judge a sequence by waiting — in a hidden pane the render loop does not
+advance it. Scrub it deterministically and read the results (full recipe in
+§12):
+
+```js
+const s = window.viewer.sequence;          // null if the icon has no sequence
+s.duration;                                // e.g. 3
+s.pause(); s.seek(0);                      // the t=0 pose
+window.viewer.component.root.scale.x;      // e.g. 0.52 — the wrapper, not the icon
+[...document.querySelectorAll('#fg [data-seq]')].map(e => [e.dataset.seq, e.style.opacity, e.style.clipPath]);
+s.seek(3.0);                               // the held final frame
+```
+
 ### Always read the status line and the console
 
 ```js
@@ -549,6 +589,9 @@ viewport and confirm the subject is still in frame — see §10.4.
 | **"Filenames with spaces broke my pack."** They didn't | Spaces are handled end-to-end | §10.3 — look elsewhere |
 | **"My second pack replaced my first."** | Only one pack is resident at a time | §11 |
 | **"Nothing I set survives a reload."** | There is no persistence at all | §11 — put it in the URL (§4) |
+| **"My icon is invisible / tiny after the pack loads"** in a pane | The pack has a sequence, whose t=0 pose is faded-out and small; a hidden pane never advances it | §10.13 — `viewer.sequence.seek(t)` |
+| **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer | §12 — the message names the track |
+| **"My icon fades to nothing but still spins / my spin is gone."** | The sequence does not own spin; a `spin` channel does not exist. The icon's own controller owns rotation | §12 |
 
 ---
 
@@ -647,26 +690,40 @@ viewport and confirm the subject is still in frame — see §10.4.
     in your model will vanish. Bear it in mind before debugging "my model is
     missing a part".
 
+13. **A pack with a sequence starts at its t=0 pose — typically invisible and
+    small — and only the render loop advances it.** In a hidden pane (gotcha
+    1) that means the icon *stays* invisible and the copy never appears; that
+    is the pane, not the pack. Drive it: `viewer.sequence.seek(3.0)` shows the
+    held final frame, and `seek(t)` at any `t` is exact (§12). Framing is
+    solved at rest pose *before* the t=0 pose is applied, so the camera is
+    right even though the icon is at 48 % — do not "fix" framing from a t=0
+    screenshot.
+
 ---
 
 ## 11. What this viewer does not do
 
 Verified against the source. Do not attempt these — they are not there to find.
 
-- **No animation transport or scrubbing UI.** Embedded glTF clips are detected
-  and *all* of them are auto-played on an `AnimationMixer` at load
+- **No transport for embedded glTF clips.** They are detected and *all* of
+  them are auto-played on an `AnimationMixer` at load
   (`gltf.animations.forEach(clip => mixer.clipAction(clip).play())`), and the
   status line reports the count. There is no play/pause/scrub/select control
   for them. The **Pause** button pauses only the turntable spin — the mixer
-  keeps advancing.
-- **No post-processing.** No `EffectComposer`, no `OutputPass`, no bloom, no
-  pass chain of any kind beyond the renderer's own ACES tone mapping. Nothing
-  from three's `postprocessing` examples is vendored. This is why `srgbOutput`
-  is `false` (§10.6).
+  keeps advancing. (The ▶/⏸ + slider that appears with a pack sequence
+  drives *that sequence* only — §12.)
+- **No post-processing.** No `EffectComposer`, no `OutputPass`, no bloom pass,
+  no pass chain of any kind beyond the renderer's own ACES tone mapping.
+  Nothing from three's `postprocessing` examples is vendored. This is why
+  `srgbOutput` is `false` (§10.6), and why a sequence's `bloom` channel is a
+  CSS glow on 2D elements, not a render pass.
 - **One icon pack resident at a time.** `unloadZip()` deletes every key in the
   `zipfs` cache, and loading a new zip clears it first. Two packs cannot
   coexist, and a pack cannot reference another pack's files.
-- **No sequencing or timeline support.** See §12.
+- **Sequences are entrances, not a general animation system.** No `spin` /
+  rotation channel (ever — §12), no keyframes beyond `[from, to]`, no
+  step-to-step transitions, no camera moves, no springs. See §12 for the
+  exact vocabulary.
 - **No persistence.** No `localStorage`, no `sessionStorage`, no cookies, no
   server. Spin speed, pivot mode, the loaded sidecar, the custom background,
   and the loaded pack are all lost on reload. The only way to restore state is
@@ -679,23 +736,282 @@ Verified against the source. Do not attempt these — they are not there to find
 
 ---
 
-## 12. Sequencing — not specified yet
+## 12. Sequences — a pack's entrance choreography (`sequence.yml`)
 
-A **YAML-driven animation-sequence format** is being designed for this viewer:
-a way to describe a timed sequence of states rather than one continuous spin.
-**The contract is not settled.** No schema, no key names, no loader, and no URL
-parameter for it exist in this repo today.
+A **sequence** is a small YAML file that describes how one icon *arrives*: the
+3D icon fading and swelling in, lines of 2D copy resolving over the canvas, a
+call-to-action appearing — timed in seconds, with named easings and labels.
+It is optional, lives at the pack root, and is named from the manifest:
 
-Do not invent one, do not write files that assume one, and do not tell a user
-this viewer can play a sequence. If someone asks for sequencing, point them at
-this section and at §11.
+```yaml
+# icons.yml
+sequence: sequence.yml
+```
+
+No key → no sequence → the pack behaves exactly as it always did. The
+worked example is `components/example-pack/sequence.yml`; run it with
+`?component=./components/example-pack/component.js`.
+
+What it is **not** (each was decided, not forgotten — §11): it is not a
+general animation DSL, it never owns spin, it does not move the camera, and it
+has no keyframes, springs, or transitions between icons.
+
+### 12.1 Layer model
+
+Four layers, back to front. Each has a different owner and a different set of
+channels that are physically possible on it, which is why targets are declared
+per layer rather than in one flat list.
+
+| Layer | What it is | Who owns it | What a sequence may do |
+|---|---|---|---|
+| **background** | `#bg`, the 2D backdrop behind the canvas | The page / the pack's `background:` | Nothing (Phase 1: not a target) |
+| **hud** | `pips` — a row of progress dots | Created from `stage.hud` | Static `initial:` state; 2D channels |
+| **icon** | The 3D icon, under a **wrapper Group** | The pack (look, spin, drag) — the sequence gets only the wrapper | `fade`, `scale`, `rise` |
+| **overlay** | `#fg` — 2D text and buttons above the canvas | Created from `stage.overlay` | `fade`, `rise`, `blur`, `wipe`, `bloom` |
+
+`#fg` is a fixed, viewport-sized DOM layer above the canvas (real text:
+selectable, accessible), `pointer-events: none` except on elements a step
+binds an action to, and emptied whenever the icon or pack unloads.
+
+**Spin is structurally unavailable.** A pack's controller *assigns*
+`rotation.y` every frame from its own config, so anything a sequence wrote to
+rotation would be overwritten before render. There is no `spin`, `yaw`, or
+`rotation` channel, and there never will be. `scale`/`rise` go on the wrapper
+Group the page puts around `api.object`, never on the icon's own object.
+
+**Framing is solved at rest pose, once, before the t=0 pose is applied, and
+never re-solved.** `frameComponent()` measures the object's *current* bounding
+box; an entrance that starts at `scale: 0.52` would otherwise be framed
+against a shrunken box. Verified: `camera.position` and `controls.target` are
+identical before and after `seek(0)`.
+
+### 12.2 The file, completely
+
+```yaml
+version: 1                                # required; this viewer plays version 1
+
+# Named easings — YAML anchors, so a review note changes one line.
+# Any Anime.js name (linear, outCubic, inOutQuart, outBack, …) or
+# cubic-bezier(a, b, c, d).
+ease:
+  swell:   &ease-swell   outCubic
+  resolve: &ease-resolve outQuart
+
+# Capabilities this sequence needs. The only one today is icon.fade and the
+# only degrade is scale-only: if the icon cannot fade, the fade channel is
+# dropped from icon tracks, everything else plays, the console warns once.
+requires:
+  icon.fade: { degrade: scale-only }
+
+# Every name a track may target. Positions are viewport fractions of the
+# element's CENTER (like framing.verticalCenter); size is font size as a
+# fraction of the viewport's SHORTER side (vmin), so copy that fits a
+# landscape desktop still fits a portrait phone.
+stage:
+  hud:
+    pips:  { type: pips, top: 0.13, size: 0.018 }
+  icon:
+    ref: current                          # `current` = every icon; or one icon's name
+  overlay:
+    line1: { type: text, top: 0.735, size: 0.05, weight: 700, tracking: 0.12 }
+    line2: { type: text, top: 0.805, size: 0.05, weight: 700, tracking: 0.12 }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff" }
+
+# State at frame 0 — not motion. Pips take { filled, total }; any target may
+# also take channel values here (e.g. line1: { fade: 0 }).
+initial:
+  pips: { filled: 1, total: 3 }
+
+steps:
+  - id: intro                             # a step with no `icon:` is the default for every icon
+    copy:                                 # text for overlay elements (overrides the element's `text`)
+      line1: "FIRST LINE OF COPY"
+      line2: "SECOND LINE OF COPY"
+    timeline: &entrance                   # anchored so another step can reuse it
+      - id: icon-entrance
+        target: icon
+        at: 0.2                           # seconds, absolute
+        timing: { dur: 0.7, ease: *ease-swell }
+        channels: { fade: [0, 1], scale: [0.52, 1] }
+      - id: copy-resolve
+        target: [line1, line2]            # a list + stagger = one gesture down a list
+        at: 0.4
+        stagger: 0.6
+        timing: { dur: 1.0, ease: *ease-resolve }
+        channels: { blur: [12, 0], wipe: [0, 1], fade: [0, 1] }
+      - label: copy-settled               # = end of the previous track (2.0 s)
+      - id: cta-in
+        target: cta
+        at: copy-settled + 0.8            # 2.8 s, and it follows the copy if the copy moves
+        timing: { dur: 0.2, ease: *ease-swell }
+        channels: { fade: [0, 1], rise: [14, 0], bloom: [0, 1] }
+    on:
+      cta.tap: { do: replay }             # Phase 1 verbs: replay, nothing
+    end: hold                             # Phase 1: hold is the only end
+
+  - id: intro-gem                         # the step for one specific icon
+    icon: gem
+    copy: { line1: "A SECOND ICON", line2: "THE SAME CHOREOGRAPHY" }
+    timeline: *entrance
+    on: { cta.tap: { do: replay } }
+    end: hold
+```
+
+Top-level keys: `version`, `ease`, `requires`, `stage`, `initial`, `steps`.
+Anything else is ignored with a validator warning. Everything below the top
+level that is wrong — an undeclared target, a channel the layer does not have,
+an unknown label or ease, a non-numeric time — is a **load-time error, by
+name**, shown in the status line as `sequence.yml: sequence: steps.intro.
+timeline[3] (cta-in): target "ctaa" is not declared in stage:`.
+
+**Which step plays.** For the icon being shown: the first step whose `icon:`
+names it, else the first step with no `icon:`; if neither exists the icon has
+no sequence. `stage.icon.ref` gates the whole file the same way (`current`, or
+one icon's name).
+
+### 12.3 Channels, per layer
+
+Channels are abstract names, never raw CSS or three.js properties. Values are
+`[from, to]` or a bare `to` (which animates from the value the state has when
+the timeline is *built* — i.e. its default or `initial:` value).
+
+**`icon` (3D — the wrapper Group + fade)**
+
+| Channel | Unit | Maps to |
+|---|---|---|
+| `fade` | 0–1 | `api.setFade(v)` if the icon provides it; else the standard-material fallback below; else dropped (`degrade: scale-only`) |
+| `scale` | multiplier | `wrapper.scale` (uniform) |
+| `rise` | world units | `wrapper.position.y` |
+
+**`overlay` and `hud` (2D DOM)**
+
+| Channel | Unit | Maps to |
+|---|---|---|
+| `fade` | 0–1 | `opacity` |
+| `rise` | px | `transform: translateY()` — positive starts *below* rest |
+| `blur` | px | `filter: blur()` |
+| `wipe` | 0–1 | left-to-right reveal, `clip-path: inset(0 (1-w)·100% 0 0)` — **a GUESS at the reveal mechanism** (see below) |
+| `bloom` | 0–1 | an *intent*; the page renders it as a two-layer `drop-shadow` glow in the element's colour |
+
+All 2D channels of one element compose into one `transform`, one `filter`,
+one `clip-path` from a single state object, so two tracks on the same element
+can never clobber each other.
+
+**The `blur` + `wipe` reveal is a stated guess.** The reference this was
+measured from reads as "blur-in with a left-to-right reveal"; a clip-path wipe
+plus a blur matches that in aggregate, but a per-character stagger or a
+travelling blur gradient would read the same from a distance. A dedicated
+research track is deciding the final mechanism. The code says so at the point
+of implementation (`renderDom()` in `sequence.js`); do not present the current
+look as final.
+
+### 12.4 Timing, labels, stagger, easing
+
+- All times are **seconds** (floats). `at:` is absolute by default because
+  review notes arrive in absolute seconds ("pull the arrow to 2.6").
+- `at: after` (or no `at`) starts when the previous track in the list ends.
+- `- label: name` declares a time = the end of the previous track (or add
+  `at:` to place it); `at: name + 0.3` / `at: name - 0.2` reference it.
+  Labels must be declared **above** the track that uses them.
+- `stagger: s` with a list `target:` starts each successive target `s` later.
+- `timing: { dur, ease }` applies to the whole track — one gesture, N
+  channels, so a fade and a scale cannot be desynced by accident.
+- `ease` is any Anime.js v4 name (`linear`, `in/out/inOut` × `Quad Cubic
+  Quart Quint Sine Circ Expo Bounce Back Elastic`, …) or
+  `cubic-bezier(a,b,c,d)`. Unknown names are load-time errors.
+- `duration` = the latest track end. `end: hold` clamps there; playback stops
+  and the final frame stays.
+
+### 12.5 The fade contract
+
+1. **Preferred:** the icon's `createIconObject()` return value has
+   `setFade(v)`; the stock loader forwards it as `api.setFade`, and the
+   sequence calls it. This is the only route for a raw `ShaderMaterial`
+   (whose alpha is whatever its fragment shader writes) — the icon must
+   multiply the value into its output alpha, with `transparent: true`.
+2. **Fallback (generic, documented):** with no `setFade`, the page walks
+   `api.object`, collects `MeshStandardMaterial` / `MeshPhysicalMaterial` /
+   `MeshBasicMaterial` instances, and while the fade is in flight sets
+   `transparent = true` and `opacity = original × v`; at `v ≥ 0.999` it
+   restores the material's own `transparent`/`opacity`, so the resting look is
+   pixel-identical to a pack without a sequence. Verified on both example
+   icons (`MeshPhysicalMaterial` with transmission, `MeshStandardMaterial`).
+3. **Degrade:** neither is possible → `requires.icon.fade.degrade:
+   scale-only` drops the `fade` channel from icon tracks, keeps everything
+   else, and warns once in the console. Any other `degrade` value is an error.
+
+### 12.6 Runtime and `window.viewer.sequence`
+
+The page imports `sequence.js` (and the vendored Anime.js 4.5.0) **only when a
+loaded icon carries `api.sequence`** — check the network panel on a pack
+without the key: neither file is requested. The runtime compiles the step into
+an Anime.js timeline created with `autoplay: false` and drives it with
+`tl.seek(t × 1000)` from the render loop's accumulated `dt` — never anime's
+own ticker, whose engine therefore never starts (`engine.reqId` stays 0). The
+pack's `update(dt)` runs first each frame (its controller assigns rotation),
+then the sequence writes the wrapper and overlay; they share no property.
+
+```js
+const s = window.viewer.sequence;   // null when the icon has no sequence
+s.duration;         // seconds, e.g. 3
+s.time;             // current time, clamped to [0, duration]
+s.playing;          // false once `end: hold` is reached, or after pause()
+s.seek(t);          // exact: renders every target for time t, in either direction
+s.play();           // from the end, restarts at 0
+s.pause();
+s.step;             // id of the step chosen for this icon
+s.targets;          // ['pips','line1','line2','cta','icon']
+s.states;           // { name: { channel: value } } snapshot, for assertions
+s.warnings;         // e.g. the degrade notice
+```
+
+A small transport (▶/⏸ + slider + time) appears in the HUD while a sequence
+is loaded; dragging the slider pauses and seeks. It exists for design review
+and is deliberately minimal.
+
+### 12.7 Verifying a sequence deterministically
+
+A hidden pane never advances the render loop (§10.1, §10.13), so drive time
+yourself. Against the example pack:
+
+```js
+const v = window.viewer, s = v.sequence, c = v.component;
+s.duration;                                     // 3
+s.pause(); s.seek(0);
+c.root.scale.x;                                 // 0.52  (wrapper — the icon's own scale is untouched)
+c.api.object.material.opacity;                  // 0     (fallback fade; transparent === true)
+document.querySelectorAll('#fg .fg-pip.on').length;             // 1 of 3
+document.querySelector('#fg [data-seq="line1"]').style.opacity; // '0'
+s.seek(0.55);  c.root.scale.x;                  // 0.935
+s.seek(1.0);   document.querySelector('#fg [data-seq="line1"]').style.clipPath; // 'inset(0px 2.56% 0px 0px)'
+s.seek(2.2);   document.querySelector('#fg [data-seq="cta"]').style.opacity;    // '0'
+s.seek(3.0);   document.querySelector('#fg [data-seq="cta"]').style.filter;     // 'drop-shadow(…) drop-shadow(…)'
+s.seek(10);    s.time;                          // 3 — held
+// spin is the controller's, not the sequence's (gem icon):
+const r = c.api.object.rotation.y; s.seek(2); s.seek(0); c.api.object.rotation.y === r;  // true
+c.api.update(1.0); c.api.object.rotation.y;     // 0.8 — only update(dt) moves it
+```
+
+Unloading (`⏏ Unload …`, or loading any model) disposes the sequence, empties
+`#fg`, restores the wrapper to scale 1 and the materials to their own flags,
+and `viewer.sequence` is `null` again.
+
+### 12.8 Deliberately not in Phase 1
+
+Keyframes beyond `[from, to]`; `shift`/`scale` on 2D elements; a `background`
+target; step-to-step transitions and the `advance`/`goto` verbs (`on:` accepts
+`replay` and `nothing`); taps on the icon (the canvas belongs to the icon's
+controller); springs; responsive variants; any URL parameter — a sequence
+arrives only inside a pack. If a request needs one of these, say so rather
+than approximating it.
 
 ---
 
 ## 13. Repo layout and where to read the source
 
 ```
-index.html                     THE WHOLE APP — markup, CSS, and one module <script>
+index.html                     THE APP — markup, CSS, and one module <script>
+sequence.js                    the sequence runtime (§12); imported by index.html only when a pack has one
 sw.js                          "zipfs" service worker: serves unzipped pack files
 vendor/
   three.module.min.js          three.js r170 (MIT), minified
@@ -704,14 +1020,15 @@ vendor/
   environments/RoomEnvironment.js
   utils/BufferGeometryUtils.js
   fflate.module.js             in-browser unzip
-  js-yaml.esm.min.mjs          YAML parser for pack manifests (icons.yml), MIT
+  js-yaml.esm.min.mjs          YAML parser for pack manifests + sequences, MIT
+  animejs.esm.min.js           Anime.js 4.5.0 (MIT) — the sequence timeline; loaded on demand
 models/*.glb                   7 Khronos sample models
 backgrounds/starfield-default.jpg   default backdrop (synthetic, 4096x2732)
 sidecars/example-emerald-glass.json example sidecar
 components/
   example-shader-orb.js        minimal single-file component example
   pack.component.js            the stock pack loader — copied into every pack
-  example-pack/                source of the example pack (unzipped)
+  example-pack/                source of the example pack (unzipped), incl. sequence.yml
   example-pack.zip             the same pack, zipped, for the drag-drop demo
 README.md                      user-facing docs (designers + component authors)
 CONTRIBUTING.md                background notes for a human contributor (not rules)
@@ -721,11 +1038,12 @@ CONTRIBUTING.md                background notes for a human contributor (not rul
   skills/…                     repeatable authoring workflows
 ```
 
-`index.html` is ~980 lines and is the only place application logic lives. Its
-sections are marked with `// --- name ---` banner comments; navigate by those.
-In rough order: renderer/scene/camera → background layer → model + pivot →
-sidecar → sidecar linter → sidecar editor UI → components → icon packs / zip
-mode → zip loading → model loading → UI → render loop.
+`index.html` is ~1,100 lines and, with `sequence.js`, is where all application
+logic lives. Its sections are marked with `// --- name ---` banner comments;
+navigate by those. In rough order: renderer/scene/camera → background layer →
+model + pivot → sidecar → sidecar linter → sidecar editor UI → components →
+sequences → icon packs / zip mode → zip loading → model loading → UI → render
+loop.
 
 Where to look when the docs above are not enough:
 
@@ -735,6 +1053,7 @@ Where to look when the docs above are not enough:
 | How is my icon actually built? | `buildIcon()` in `components/pack.component.js` |
 | Which sidecar properties does the linter recognise? | `PROP_TYPES`, near the top of the sidecar-linter section |
 | How is my zip unpacked and served? | `loadZipFile()` in `index.html`, plus `sw.js` |
+| How is my sequence compiled and played? | `createSequence()` in `sequence.js`; `startSequence()` / the render loop in `index.html` |
 | What does the viewer support at all? | `README.md`, and §11 above for what it does not |
 
 ---

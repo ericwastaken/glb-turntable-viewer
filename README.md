@@ -31,7 +31,8 @@ Full contents:
    [layout](#zip-layout) ·
    [standard exports](#standard-exports) ·
    [packaging](#packaging-a-multi-icon-zip-step-by-step) ·
-   [loading](#loading-it-on-the-page)
+   [loading](#loading-it-on-the-page) ·
+   [sequences](#sequences-choreographing-an-icons-entrance)
 6. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
 
 ## Run it locally
@@ -97,8 +98,9 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 
 | Path | What |
 |---|---|
-| `index.html` | The whole page (markup, styles, and module script). |
-| `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment; fflate (MIT) for zips; js-yaml 5.4.1 (MIT) for pack manifests. All self-hosted. |
+| `index.html` | The page (markup, styles, and module script). |
+| `sequence.js` | Plays a pack's optional `sequence.yml` (entrance choreography); loaded only when a pack has one. |
+| `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment; fflate (MIT) for zips; js-yaml 5.4.1 (MIT) for pack manifests and sequences; Anime.js 4.5.0 (MIT) for sequence timelines. All self-hosted. |
 | `backgrounds/` | `starfield-default.jpg` — synthetic starfield (generated, 4096×2732), the default backdrop. |
 | `models/` | Sample models from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets): glass/transmission tests (DragonAttenuation, MosquitoInAmber, GlassVaseFlowers, GlassHurricaneCandleHolder, IridescentDishWithOlives, DispersionTest) plus DamagedHelmet (PBR). |
 
@@ -202,8 +204,8 @@ imports and asset paths work untouched; nothing is uploaded anywhere.
 
 Download
 [`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
-(5.6 KB — two procedural icons plus the pack's own background; no per-icon
-asset files) and drag it onto
+(8.6 KB — two procedural icons, the pack's own background, and an entrance
+sequence; no per-icon asset files) and drag it onto
 [the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
 dropdown switches to the pack's icons ("twist" and "gem") plus an
 "⏏ Unload zip" entry. While a pack is loaded, the turntable and sidecar
@@ -218,7 +220,8 @@ icon (two required exports); `icons/gem` adds the optional motion controller.
 ```
 my-icons.zip
 ├── component.js       ← the universal pack loader: copy components/pack.component.js, never edit it
-├── icons.yml          ← icons: [nameA, nameB]   background: backgrounds/sky.jpg
+├── icons.yml          ← icons: [nameA, nameB]   background: backgrounds/sky.jpg   sequence: sequence.yml
+├── sequence.yml       ← optional: how each icon ENTERS (fade/scale in, copy, call-to-action)
 ├── backgrounds/       ← optional images referenced from icons.yml
 └── icons/
     ├── nameA/
@@ -290,6 +293,59 @@ is simply what makes the pack portable.
 Adding an icon to an existing pack: drop its folder under `icons/`, add its
 name to `icons.yml`, re-compress, drag the new zip onto the page.
 
+### Sequences: choreographing an icon's entrance
+
+A pack may ship a **`sequence.yml`** — a small, commented YAML file that says
+how an icon *arrives*: the 3D icon fading and swelling in, lines of copy
+resolving over the canvas, a call-to-action appearing, all timed in seconds.
+Name it from the manifest and the viewer plays it whenever one of the pack's
+icons is shown:
+
+```yaml
+# icons.yml
+sequence: sequence.yml
+```
+
+```yaml
+# sequence.yml (abridged — the example pack's file is fully commented)
+version: 1
+ease: { swell: &swell outCubic }
+stage:
+  hud:     { pips:  { type: pips, top: 0.13, size: 0.018 } }
+  icon:    { ref: current }
+  overlay:
+    line1: { type: text, top: 0.735, size: 0.05 }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→" }
+initial: { pips: { filled: 1, total: 3 } }
+steps:
+  - id: intro
+    copy: { line1: "FIRST LINE OF COPY" }
+    timeline:
+      - { id: icon-in, target: icon,  at: 0.2, timing: { dur: 0.7, ease: *swell }, channels: { fade: [0, 1], scale: [0.52, 1] } }
+      - { id: copy-in, target: line1, at: 0.4, timing: { dur: 1.0, ease: outQuart }, channels: { blur: [12, 0], wipe: [0, 1], fade: [0, 1] } }
+      - label: copy-settled
+      - { id: cta-in,  target: cta,   at: copy-settled + 0.8, timing: { dur: 0.2, ease: *swell }, channels: { fade: [0, 1], rise: [14, 0], bloom: [0, 1] } }
+    on: { cta.tap: { do: replay } }
+    end: hold
+```
+
+- The 3D icon gets `fade`, `scale`, `rise`; 2D text and buttons get `fade`,
+  `rise`, `blur`, `wipe`, `bloom`. Times are seconds; `at:` can be a number,
+  `after`, or `label + 0.3`. Easings are Anime.js names or `cubic-bezier()`.
+- **The sequence never owns spin.** Your icon's own controller keeps turning
+  it; the sequence only stages the entrance. There is no rotation channel.
+- Fading works out of the box for icons built from three.js standard
+  materials. An icon with its own shader material should expose `setFade(v)`
+  on the object it returns; otherwise the fade is skipped and the console says
+  so once.
+- A ▶/⏸ button and a scrub slider appear in the HUD while a sequence is
+  loaded, for design review. Text is real, selectable DOM.
+- No `sequence:` key → nothing changes; existing packs are untouched.
+
+The full schema, channel tables, and a deterministic way to verify a sequence
+live in [`AGENT.md`](AGENT.md) §12. `validate-pack.py` checks `sequence.yml`
+too (it needs PyYAML for that part).
+
 **Deprecated: `icons.json`.** Older packs used a JSON manifest with the same
 keys. It still loads today (with a console warning) and will be unsupported in
 a future version — rename it to `icons.yml`; the content is already valid YAML.
@@ -306,3 +362,5 @@ viewer will say so rather than fail silently.
 - No Draco/meshopt decoders: use uncompressed GLB files, or add `DRACOLoader`
   plus the wasm decoder to `vendor/`.
 - No KTX2 texture support (same deal: add `KTX2Loader` if needed).
+- Sequences are entrances only: no rotation channel, no keyframes beyond
+  `[from, to]`, no transitions between icons, no camera moves.

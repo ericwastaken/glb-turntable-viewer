@@ -3,7 +3,9 @@
 
 Checks the same things the viewer's loader checks at runtime, but without a
 browser, so a broken pack is caught before anyone drags it onto the page.
-Python 3 standard library only - no install step.
+Python 3 standard library only - no install step. (PyYAML, if installed, is
+used for full YAML; it is required to validate a sequence.yml, whose nested
+shape the built-in subset parser does not read.)
 
     python3 .claude/tools/validate-pack.py components/example-pack.zip
     python3 .claude/tools/validate-pack.py components/example-pack/
@@ -140,6 +142,229 @@ def parse_manifest(text, name):
     return _yaml_subset(text), "subset"
 
 
+def parse_sequence(text):
+    """sequence.yml is nested (stage → layer → element, steps → timeline → tracks),
+    which the subset parser cannot read. PyYAML if installed, else JSON-shaped,
+    else None (the caller says PyYAML is required)."""
+    try:
+        import yaml  # type: ignore
+        return yaml.safe_load(text), "pyyaml"
+    except ImportError:
+        pass
+    try:
+        return json.loads(text), "json-shaped"
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+# --- sequence.yml structure ------------------------------------------------------
+# Mirrors sequence.js (the runtime), which reports the same things as load-time
+# errors. Kept as data so the two are easy to diff against each other.
+LAYER_CHANNELS = {
+    "icon": ("fade", "scale", "rise"),
+    "dom": ("fade", "rise", "blur", "wipe", "bloom"),
+}
+ELEMENT_TYPES = {"hud": ("pips",), "overlay": ("text", "button")}
+ELEMENT_KEYS = {"type", "top", "left", "size", "color", "weight", "tracking", "text"}
+ACTIONS = ("replay", "nothing")
+EASE_NAME = re.compile(
+    r"^(linear|none|in|out|inOut|outIn|(in|out|inOut|outIn)"
+    r"(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$"
+)
+CUBIC_BEZIER = re.compile(r"^cubic-bezier\(\s*[-+\d.]+\s*(,\s*[-+\d.]+\s*){3}\)$")
+AT_EXPR = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*(?:([+-])\s*([\d.]+))?\s*$")
+TOP_KEYS = ("version", "ease", "requires", "stage", "initial", "steps")
+
+
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def validate_sequence(doc, seq_file, icon_names, errors, warnings):
+    """Structural checks: every track target is declared, channels are legal for
+    the target's layer, timings are numeric, labels exist, eases are known."""
+    err = lambda m: errors.append(f"{seq_file}: {m}")  # noqa: E731
+    warn = lambda m: warnings.append(f"{seq_file}: {m}")  # noqa: E731
+
+    if not isinstance(doc, dict):
+        err("must be a YAML mapping at the root")
+        return
+    if doc.get("version") != 1:
+        err(f'"version" must be 1 (got {doc.get("version")!r})')
+    for k in doc:
+        if k not in TOP_KEYS:
+            warn(f'unknown top-level key "{k}" (ignored by the viewer)')
+
+    # -- stage: declared targets, by layer kind
+    targets = {}  # name -> ("dom"|"icon", type)
+    stage = doc.get("stage") or {}
+    if not isinstance(stage, dict):
+        err('"stage" must be a mapping of layers (hud, icon, overlay)')
+        stage = {}
+    for layer, decls in stage.items():
+        if layer == "icon":
+            if not isinstance(decls, dict):
+                err('stage.icon must be a mapping such as { ref: current }')
+                continue
+            ref = decls.get("ref", "current")
+            if ref != "current" and ref not in icon_names:
+                err(f'stage.icon.ref "{ref}" is neither "current" nor a listed icon')
+            targets["icon"] = ("icon", "icon")
+            continue
+        if layer not in ELEMENT_TYPES:
+            err(f'stage.{layer}: unknown layer (this viewer knows hud, icon, overlay)')
+            continue
+        if not isinstance(decls, dict):
+            err(f"stage.{layer} must be a mapping of element name → declaration")
+            continue
+        for name, decl in decls.items():
+            where = f"stage.{layer}.{name}"
+            if name == "icon" or name in targets:
+                err(f"{where}: name already used by another target")
+                continue
+            if not isinstance(decl, dict):
+                err(f"{where} must be a mapping such as {{ type: text, top: 0.7 }}")
+                continue
+            t = decl.get("type")
+            if t not in ELEMENT_TYPES[layer]:
+                err(f'{where}.type must be one of {", ".join(ELEMENT_TYPES[layer])} (got {t!r})')
+            for k in ("top", "left"):
+                if k in decl and not (_is_num(decl[k]) and 0 <= decl[k] <= 1):
+                    err(f"{where}.{k} must be a viewport fraction 0–1")
+            for k in ("size", "tracking"):
+                if k in decl and not _is_num(decl[k]):
+                    err(f"{where}.{k} must be a number")
+            for k in decl:
+                if k not in ELEMENT_KEYS:
+                    warn(f'{where}: unknown key "{k}" (ignored)')
+            targets[name] = ("dom", t)
+
+    # -- initial: state for declared targets only
+    initial = doc.get("initial") or {}
+    if not isinstance(initial, dict):
+        err('"initial" must be a mapping of target name → state')
+        initial = {}
+    for name, st in initial.items():
+        if name not in targets:
+            err(f'initial.{name}: "{name}" is not declared in stage')
+            continue
+        if not isinstance(st, dict):
+            err(f"initial.{name} must be a mapping")
+            continue
+        kind, etype = targets[name]
+        for ch, v in st.items():
+            if etype == "pips" and ch in ("filled", "total"):
+                if not _is_num(v):
+                    err(f"initial.{name}.{ch} must be a number")
+                continue
+            if ch not in LAYER_CHANNELS[kind]:
+                err(f'initial.{name}.{ch}: not a {kind} channel ({", ".join(LAYER_CHANNELS[kind])})')
+            elif not _is_num(v):
+                err(f"initial.{name}.{ch} must be a number")
+
+    # -- requires
+    req = doc.get("requires") or {}
+    if isinstance(req, dict):
+        deg = (req.get("icon.fade") or {}).get("degrade") if isinstance(req.get("icon.fade"), dict) else None
+        if deg not in (None, "scale-only"):
+            err(f'requires.icon.fade.degrade "{deg}" is not supported (only scale-only)')
+
+    # -- steps
+    steps = doc.get("steps")
+    if not isinstance(steps, list) or not steps:
+        err('"steps" must be a non-empty list')
+        return
+    dom_names = [n for n, (k, _) in targets.items() if k == "dom"]
+    for si, step in enumerate(steps):
+        sid = step.get("id", f"#{si}") if isinstance(step, dict) else f"#{si}"
+        where_s = f"steps[{si}] ({sid})"
+        if not isinstance(step, dict):
+            err(f"{where_s} must be a mapping")
+            continue
+        if "icon" in step and step["icon"] not in icon_names:
+            err(f'{where_s}.icon "{step["icon"]}" is not a listed icon')
+        for name in (step.get("copy") or {}):
+            if name not in dom_names:
+                err(f'{where_s}.copy.{name}: not a declared overlay/hud element')
+        end = step.get("end", "hold")
+        if end != "hold":
+            warn(f'{where_s}.end "{end}" is not implemented — the viewer holds the final frame')
+        on = step.get("on") or {}
+        if not isinstance(on, dict):
+            err(f"{where_s}.on must be a mapping such as {{ cta.tap: {{ do: replay }} }}")
+        else:
+            for key, action in on.items():
+                m = re.match(r"^([A-Za-z_][\w-]*)\.tap$", str(key))
+                if not m:
+                    err(f"{where_s}.on.{key}: only <target>.tap is supported")
+                    continue
+                if m.group(1) not in targets:
+                    err(f'{where_s}.on.{key}: target "{m.group(1)}" is not declared in stage')
+                elif targets[m.group(1)][0] == "icon":
+                    warn(f"{where_s}.on.{key}: taps on the icon are not routed (ignored)")
+                verb = action.get("do") if isinstance(action, dict) else None
+                if verb not in ACTIONS:
+                    err(f'{where_s}.on.{key}.do must be one of {", ".join(ACTIONS)}')
+
+        timeline = step.get("timeline")
+        if not isinstance(timeline, list):
+            err(f"{where_s}.timeline must be a list of tracks and labels")
+            continue
+        labels = set()
+        for ti, entry in enumerate(timeline):
+            where = f"{where_s}.timeline[{ti}]"
+            if not isinstance(entry, dict):
+                err(f"{where} must be a mapping")
+                continue
+
+            def check_at(expr, where=where):
+                if expr is None or expr == "after" or _is_num(expr):
+                    return
+                m = AT_EXPR.match(str(expr))
+                if not m:
+                    err(f"{where}.at: cannot parse {expr!r}")
+                elif m.group(1) not in labels:
+                    err(f'{where}.at: unknown label "{m.group(1)}" (declare it above the track)')
+
+            if "label" in entry:
+                check_at(entry.get("at"))
+                labels.add(str(entry["label"]))
+                continue
+            tid = entry.get("id", f"#{ti}")
+            where = f"{where} ({tid})"
+            tgts = entry.get("target")
+            tgts = tgts if isinstance(tgts, list) else [tgts]
+            kinds = set()
+            for name in tgts:
+                if not isinstance(name, str) or name not in targets:
+                    err(f'{where}: target "{name}" is not declared in stage')
+                else:
+                    kinds.add(targets[name][0])
+            check_at(entry.get("at"), where)
+            if "stagger" in entry and not _is_num(entry["stagger"]):
+                err(f"{where}.stagger must be a number of seconds")
+            timing = entry.get("timing") or {}
+            if not isinstance(timing, dict):
+                err(f"{where}.timing must be {{ dur, ease }}")
+                timing = {}
+            if "dur" in timing and not (_is_num(timing["dur"]) and timing["dur"] >= 0):
+                err(f"{where}.timing.dur must be a number of seconds ≥ 0")
+            ease = timing.get("ease")
+            if ease is not None and not (EASE_NAME.match(str(ease)) or CUBIC_BEZIER.match(str(ease))):
+                err(f'{where}.timing.ease "{ease}" is not an Anime.js ease name or cubic-bezier(a,b,c,d)')
+            channels = entry.get("channels")
+            if not isinstance(channels, dict) or not channels:
+                err(f"{where} needs a non-empty channels mapping")
+                continue
+            for ch, v in channels.items():
+                for kind in kinds:
+                    if ch not in LAYER_CHANNELS[kind]:
+                        err(f'{where}.channels.{ch}: not a {kind} channel ({", ".join(LAYER_CHANNELS[kind])})')
+                ok = _is_num(v) or (isinstance(v, list) and len(v) == 2 and all(_is_num(x) for x in v))
+                if not ok:
+                    err(f"{where}.channels.{ch} must be a number or [from, to]")
+
+
 def exports(src, name):
     esc = re.escape(name)
     return any(re.search(p.replace("@", esc), src) for p in EXPORT_PATTERNS)
@@ -224,7 +449,7 @@ def main(argv):
                 errors.append(f'{mf} needs a non-empty "icons" list of folder names')
                 names = []
             for extra in manifest:
-                if extra not in ("icons", "background", "backgrounds"):
+                if extra not in ("icons", "background", "backgrounds", "sequence"):
                     warnings.append(f'{mf}: unknown key "{extra}" (ignored by the loader)')
         elif manifest is not None:
             errors.append(f"{mf} must be a mapping at the root")
@@ -274,6 +499,28 @@ def main(argv):
                         "which is not a listed icon"
                     )
                 check_bg(value, f'{mf} "backgrounds"."{icon}"')
+
+    # --- sequence -----------------------------------------------------------
+    # Optional `sequence: sequence.yml` in the manifest (AGENT.md §12). The file
+    # must exist in the pack; its structure is checked against the same rules
+    # the runtime enforces at load.
+    if isinstance(manifest, dict) and manifest.get("sequence") is not None:
+        seq_file = manifest.get("sequence")
+        if not isinstance(seq_file, str) or not seq_file.strip():
+            errors.append(f'{mf} "sequence" must be a relative path such as sequence.yml')
+        elif seq_file not in files:
+            errors.append(f'{mf} "sequence" points at "{seq_file}", which is not in the pack')
+        else:
+            doc, how = parse_sequence(files[seq_file].decode("utf-8"))
+            if how is None:
+                warnings.append(
+                    f"{seq_file} was NOT validated: PyYAML is required to read a sequence "
+                    "file (pip install pyyaml)"
+                )
+            else:
+                validate_sequence(doc, seq_file, listed, errors, warnings)
+                if not errors or not any(e.startswith(seq_file) for e in errors):
+                    print(f"  note   {seq_file}: sequence structure OK ({how})")
 
     # --- size sanity --------------------------------------------------------
     for path, data in sorted(files.items()):

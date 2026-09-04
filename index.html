@@ -17,6 +17,33 @@
   #bg { position: fixed; inset: 0; background: center / cover no-repeat; }
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
+  /* Foreground overlay: 2D copy and calls-to-action a pack's sequence.yml draws
+     ABOVE the canvas (real DOM text — selectable, accessible — never canvas).
+     Click-through by default so the icon can still be dragged; only elements a
+     sequence binds an action to take pointer events. Emptied on unload. */
+  #fg { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #fg .fg-el {
+    position: absolute; transform: translate(-50%, -50%);
+    /* max-content: an absolutely-positioned box at left:50% would otherwise
+       shrink-wrap to the remaining half of the viewport and wrap early. */
+    width: max-content; max-width: 92vw;
+    text-align: center; white-space: pre-wrap; line-height: 1.15;
+    color: #f2f5ff; --glow: #f2f5ff;
+    text-shadow: 0 2px 12px #0008;
+    will-change: transform, opacity, filter, clip-path;
+  }
+  #fg .fg-button {
+    background: none; border: 0; padding: .1em .4em; font: inherit; color: inherit;
+    cursor: default; border-radius: .3em;
+  }
+  #fg .fg-action { pointer-events: auto; cursor: pointer; }
+  #fg .fg-action:hover { text-decoration: underline; text-underline-offset: .15em; }
+  #fg .fg-pips { display: flex; gap: .9em; }
+  #fg .fg-pip {
+    width: 1em; height: 1em; border-radius: 50%;
+    border: .12em solid #e9e3f4cc; background: transparent; box-sizing: border-box;
+  }
+  #fg .fg-pip.on { background: #e9e3f4; box-shadow: 0 0 .6em #e9e3f499; }
 
   #hud {
     position: fixed; top: 0; left: 0; right: 0;
@@ -87,6 +114,10 @@
   body.zipmode #starsWrap, body.zipmode #bgChip {
     display: none !important;
   }
+  /* Sequence transport: shown only while a loaded icon has a sequence. */
+  #seqWrap { display: none; }
+  #seqWrap button { min-width: 2.4em; padding: 4px 6px; }
+  #seqTime { font-variant-numeric: tabular-nums; min-width: 4.5em; }
 
   /* --- narrow screens (phones): compact HUD + bottom-sheet editor ---------- */
   @media (max-width: 640px) {
@@ -115,6 +146,7 @@
 <body>
 <div id="bg"></div>
 <div id="app"></div>
+<div id="fg"></div>
 
 <div id="hud">
   <!-- A row's value is its identity, not its path: the same dragon appears
@@ -146,6 +178,11 @@
   <label class="grp" id="starsWrap" title="Default starfield backdrop (synthetic, generated for this project)"><input type="checkbox" id="starsToggle" checked> Stars</label>
   <button id="bgChip" style="display:none" title="Remove the custom background"><span id="bgName"></span> ✕</button>
   <button id="compChip" style="display:none" title="Unload the custom component"><span id="compName"></span> ✕</button>
+  <span class="grp" id="seqWrap" title="Scrub the loaded sequence (dragging pauses it)">
+    <button id="seqPlay" title="Play / pause the sequence">⏸</button>
+    <input type="range" id="seqScrub" min="0" max="1" step="0.01" value="0">
+    <span id="seqTime">0.00 s</span>
+  </span>
   <span id="links">
     <a href="https://github.com/ericwastaken/glb-turntable-viewer" target="_blank" rel="noopener">
       <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -176,6 +213,7 @@
   "imports": {
     "three": "./vendor/three.module.min.js",
     "js-yaml": "./vendor/js-yaml.esm.min.mjs",
+    "animejs": "./vendor/animejs.esm.min.js",
     "three/examples/jsm/loaders/GLTFLoader.js": "./vendor/loaders/GLTFLoader.js",
     "three/examples/jsm/controls/OrbitControls.js": "./vendor/controls/OrbitControls.js",
     "three/examples/jsm/environments/RoomEnvironment.js": "./vendor/environments/RoomEnvironment.js",
@@ -509,7 +547,10 @@ $('docsBtn').onclick = () =>
 // into the DevTools console. Components therefore load ONLY from this site's
 // own origin (?component=relative/path.js) or from a file the user explicitly
 // picks/drops. Cross-origin URLs are rejected.
-let component = null;   // { name, api, kind: 'object' | 'material' }
+let component = null;   // { name, api, kind: 'object' | 'material', root?, seq? }
+                        // root: what sits under the pivot — api.object, or the
+                        // wrapper Group a sequence animates; seq: the running
+                        // sequence runtime (see the sequences section below)
 
 // Components may take over pointer input (e.g. a pack icon's own drag/spin
 // controller). While attached, OrbitControls stops rotating the camera (zoom
@@ -541,8 +582,9 @@ function detachPointer() {
 
 function unloadComponent(reloadModel = false, keepBackground = false) {
   if (!component) return;
+  stopSequence();
   try { component.api.dispose?.(); } catch (e) { console.warn('component dispose:', e); }
-  if (component.kind === 'object' && component.api.object) pivot.remove(component.api.object);
+  if (component.kind === 'object' && component.root) pivot.remove(component.root);
   if (component.kind === 'material' && current) {
     current.traverse(o => { if (o.isMesh && originalMats.has(o)) o.material = originalMats.get(o); });
   }
@@ -554,12 +596,17 @@ function unloadComponent(reloadModel = false, keepBackground = false) {
   if (reloadModel) modelSelect.onchange();
 }
 
-function applyComponentApi(api, name) {
+async function applyComponentApi(api, name) {
   if (api?.object) {
     if (current) { pivot.remove(current); current = null; }   // component replaces the model
-    pivot.add(api.object);
+    // A sequence animates scale/rise on a WRAPPER around the icon, never on
+    // the icon's own object — its controller may assign rotation every frame.
+    const root = api.sequence ? new THREE.Group().add(api.object) : api.object;
+    pivot.add(root);
     pivot.rotation.set(0, 0, 0);
-    component = { name, api, kind: 'object' };
+    component = { name, api, kind: 'object', root, seq: null };
+    // Framing is solved here, at REST pose, and never again: the sequence's
+    // t=0 pose (e.g. scale 0.52, fade 0) must not shrink the framed box.
     frameComponent(api);
   } else if (api?.material) {
     if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; return false; }
@@ -575,8 +622,57 @@ function applyComponentApi(api, name) {
   $('compName').textContent = name;
   $('compChip').style.display = 'inline-block';
   refreshStatus();
+  if (api.sequence && component.kind === 'object') await startSequence(component);
   return true;
 }
+
+// --- sequences (entrance choreography from a pack's sequence.yml) ---------------
+// A loaded icon may carry `api.sequence = { file, doc }` — the pack loader's
+// parsed sequence.yml (AGENT.md §12). The runtime in ./sequence.js compiles it
+// into a paused Anime.js timeline that the render loop drives with seek(t)
+// from accumulated dt, so it is deterministic and scrubbable. Both modules are
+// imported only here, so a pack without a sequence never fetches them.
+const fgEl = $('fg');
+const seqWrap = $('seqWrap'), seqScrub = $('seqScrub'), seqPlay = $('seqPlay'), seqTime = $('seqTime');
+
+async function startSequence(comp) {
+  const { api, name, root } = comp;
+  root.visible = false;   // no flash of the rest pose while the module loads
+  let seq = null;
+  try {
+    const { createSequence } = await import('./sequence.js');
+    seq = createSequence(api.sequence.doc, { root: fgEl, wrapper: root, api, iconName: name, file: api.sequence.file });
+  } catch (err) {
+    status.textContent = `${api.sequence.file}: ${err.message}`;
+    console.error(err);
+  }
+  if (component !== comp) { seq?.dispose(); return; }   // the user moved on while we loaded
+  root.visible = true;
+  comp.seq = seq;
+  syncSequenceUI();
+}
+
+function stopSequence() {
+  component?.seq?.dispose();
+  if (component) component.seq = null;
+  fgEl.replaceChildren();
+  syncSequenceUI();
+}
+
+// The transport is a design-review aid: drag = pause + seek, ▶/⏸ toggles.
+const seqUi = { time: -1, playing: null };   // what the transport last showed
+function syncSequenceUI() {
+  const s = component?.seq;
+  seqWrap.style.display = s ? 'flex' : 'none';
+  if (!s) { seqUi.time = -1; seqUi.playing = null; return; }
+  seqScrub.max = s.duration;
+  seqScrub.value = s.time;
+  seqTime.textContent = `${s.time.toFixed(2)} s`;
+  seqPlay.textContent = s.playing ? '⏸' : '▶';
+  seqUi.time = s.time; seqUi.playing = s.playing;
+}
+seqScrub.oninput = () => { const s = component?.seq; if (!s) return; s.pause(); s.seek(parseFloat(seqScrub.value)); syncSequenceUI(); };
+seqPlay.onclick = () => { const s = component?.seq; if (!s) return; s.playing ? s.pause() : s.play(); syncSequenceUI(); };
 
 async function activateComponent(mod, name, assetPath) {
   if (typeof mod.createComponent !== 'function') {
@@ -597,7 +693,7 @@ async function activateComponent(mod, name, assetPath) {
     await enterPack(name, api.icons);
     return;
   }
-  applyComponentApi(api, name);
+  await applyComponentApi(api, name);
 }
 
 // --- icon packs / zip mode -----------------------------------------------------
@@ -655,7 +751,7 @@ async function activatePackIcon(name) {
   let api;
   try { api = await zipState.icons[name](); }
   catch (err) { status.textContent = `Icon ${name} failed: ${err.message}`; console.error(err); return; }
-  applyComponentApi(api, name);
+  await applyComponentApi(api, name);
 }
 
 function unloadZip(reloadDefault) {
@@ -961,6 +1057,15 @@ renderer.setAnimationLoop(() => {
   if ((current || component?.kind === 'object') && !paused)
     pivot.rotation.y += dt * parseFloat(speedInput.value);
   try { component?.api.update?.(dt); } catch (e) { console.error('component update:', e); }
+  // The pack's own update runs FIRST (its controller assigns rotation), then
+  // the sequence advances the wrapper/overlay. They never share a property.
+  const seq = component?.seq;
+  if (seq) {
+    if (seq.playing) seq.update(dt);
+    // Keep the transport honest after a programmatic seek() too (e.g. from the
+    // console); only touch the DOM when something actually changed.
+    if (seq.time !== seqUi.time || seq.playing !== seqUi.playing) syncSequenceUI();
+  }
   mixer?.update(dt);
   controls.update();
   renderer.render(scene, camera);
@@ -973,7 +1078,9 @@ addEventListener('resize', () => {
 });
 
 // Debug handle for console experiments (material tweaks, inspection).
-window.viewer = { THREE, scene, camera, renderer, pivot, controls, get model() { return current; }, get component() { return component; } };
+window.viewer = { THREE, scene, camera, renderer, pivot, controls,
+  get model() { return current; }, get component() { return component; },
+  get sequence() { return component?.seq ?? null; } };   // { duration, time, seek(t), play(), pause(), … } or null
 </script>
 </body>
 </html>

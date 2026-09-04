@@ -2,8 +2,8 @@
 // This file is always the same, for every pack. Do not edit it.
 //
 // It reads icons.yml (the manifest: folder names under icons/, plus optional
-// backgrounds) and drives each icon through the standard exports every icon's
-// src/index.js provides:
+// backgrounds and an optional sequence file) and drives each icon through the
+// standard exports every icon's src/index.js provides:
 //
 //   createIconObject({ geometry, textures, srgbOutput })   required
 //   loadIconGeometry({ path })                             required
@@ -11,13 +11,19 @@
 //   IconController                                         optional
 //   LAYOUT ({ iconHeightFraction, verticalCenter })        optional
 //
+// The object createIconObject returns may also carry setFade(v) — a 0–1
+// opacity setter a sequence uses to fade the icon in. Without it the viewer
+// falls back to fading the icon's standard materials.
+//
 // Pack layout:
 //   component.js          this file (never changes)
 //   icons.yml             icons: [nameA, nameB, ...]                    required
 //                         background: backgrounds/sky.jpg               optional, pack-wide
 //                         backgrounds: { nameB: backgrounds/alt.jpg }   optional, per icon
+//                         sequence: sequence.yml                        optional, entrance choreography
 //                         (an icons.json with the same keys still loads, but is
 //                          deprecated and will be unsupported in a future version)
+//   sequence.yml          optional — see AGENT.md §12; the viewer plays it, this file only reads it
 //   icons/<name>/src/index.js + icons/<name>/assets/...
 //   backgrounds/...       optional images referenced above (or use a CSS color string)
 //
@@ -32,7 +38,7 @@ function resolveBackground(v) {
   return isColor ? { color: v } : { image: new URL(v, import.meta.url).href };
 }
 
-async function buildIcon(ctx, name, background) {
+async function buildIcon(ctx, name, background, sequence) {
   const base = new URL(`./icons/${name}/`, import.meta.url);
   const mod = await import(new URL('src/index.js', base).href);
 
@@ -70,11 +76,17 @@ async function buildIcon(ctx, name, background) {
     up: () => controller.pointerUp?.(),
   } : undefined;
 
+  // The icon's own fade setter, forwarded so a sequence can reach it — the
+  // material is closure-local to the icon module and nothing else exposes it.
+  const setFade = typeof icon.setFade === 'function' ? v => icon.setFade(v) : undefined;
+
   return {
     object,
     framing,
     background,
     pointer,
+    setFade,
+    sequence,   // { file, doc } parsed from the manifest's `sequence:` file, or undefined
     update(dt) {
       if (controller) { controller.update(dt); icon.update?.(dt, controller); }
       else icon.update?.(dt);
@@ -118,12 +130,33 @@ async function readManifest() {
   throw new Error(`Could not read icons.yml next to component.js (HTTP ${res.status}). ${EXAMPLE}`);
 }
 
+// The manifest's optional `sequence:` names a YAML file, relative to
+// component.js, that choreographs each icon's entrance (AGENT.md §12). The
+// loader only fetches and parses it; the VIEWER plays it. A pack without the
+// key gets no sequence and behaves exactly as before.
+async function readSequence(manifest, file) {
+  const rel = manifest.sequence;
+  if (rel === undefined || rel === null) return undefined;
+  if (typeof rel !== 'string' || !rel.trim()) throw new Error(`${file}: "sequence" must be a relative path such as sequence.yml`);
+  const url = new URL(rel, import.meta.url);
+  let res;
+  try { res = await fetch(url); }
+  catch (err) { throw new Error(`Could not fetch ${rel} named by ${file} (${err.message}).`); }
+  if (!res.ok) throw new Error(`Could not read ${rel} named by ${file} (HTTP ${res.status}).`);
+  const { load } = await import('js-yaml');
+  let doc;
+  try { doc = load(await res.text()); }
+  catch (err) { throw new Error(`${rel} is not valid YAML: ${err.message}`); }
+  return { file: rel, doc };
+}
+
 export async function createComponent(ctx) {
   const { file, manifest } = await readManifest();
   const names = manifest?.icons;
   if (!Array.isArray(names) || names.length === 0) {
     throw new Error(`${file} has no icons listed. ${EXAMPLE}`);
   }
+  const sequence = await readSequence(manifest, file);
 
   // Always return the icons map — the viewer lists them in its dropdown
   // (even a single icon shows by name, with an unload entry).
@@ -132,7 +165,7 @@ export async function createComponent(ctx) {
   const icons = {};
   for (const name of names) {
     const bg = resolveBackground(perIcon[name]) ?? packBg;
-    icons[name] = () => buildIcon(ctx, name, bg);
+    icons[name] = () => buildIcon(ctx, name, bg, sequence);
   }
   return { icons };
 }

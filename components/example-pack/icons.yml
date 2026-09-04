@@ -13,3 +13,7 @@ background: backgrounds/dusk.jpg
 # to `background`.
 # backgrounds:
 #   gem: "#05061a"
+
+# Optional entrance choreography (AGENT.md §12). Leave the key out and the
+# pack behaves exactly as it always has.
+sequence: sequence.yml

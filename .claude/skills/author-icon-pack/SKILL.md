@@ -1,6 +1,6 @@
 ---
 name: author-icon-pack
-description: Build, validate, and test an icon-pack ZIP for this viewer — the icons.yml manifest, the standard per-icon exports (createIconObject / loadIconGeometry / loadIconTextures / IconController / LAYOUT), packaging, and the zipfs service-worker path. Use when asked to create, fix, extend, or validate a pack or the zip drag-drop workflow.
+description: Build, validate, and test an icon-pack ZIP for this viewer — the icons.yml manifest (including the optional sequence key), the standard per-icon exports (createIconObject / loadIconGeometry / loadIconTextures / IconController / LAYOUT / setFade), packaging, and the zipfs service-worker path. Use when asked to create, fix, extend, or validate a pack or the zip drag-drop workflow. For the entrance choreography file itself, use author-sequence.
 ---
 
 # Authoring an icon pack
@@ -20,6 +20,7 @@ Spec reference: `AGENT.md` §7. Working example: `components/example-pack/`
 my-pack/
 ├── component.js        ← EXACT copy of components/pack.component.js. Never edit.
 ├── icons.yml
+├── sequence.yml        ← optional entrance choreography (author-sequence skill, AGENT.md §12)
 ├── backgrounds/        ← optional
 └── icons/
     ├── nameA/
@@ -48,6 +49,7 @@ icons:
 background: backgrounds/dusk.jpg
 backgrounds:
   nameB: "#05061a"
+sequence: sequence.yml        # optional — see the author-sequence skill
 ```
 
 (`icons.json` with the same keys is **deprecated** — it still loads with a
@@ -62,6 +64,10 @@ console warning and will be unsupported in a future version. Rename it to
   is resolved as a path relative to `component.js`.
 - `backgrounds` — optional per-icon overrides, same value rules, falling back
   to `background`.
+- `sequence` — optional path (relative to `component.js`) of a `sequence.yml`
+  that choreographs each icon's entrance. The loader fetches and parses it and
+  hands it to every icon as `api.sequence`; the viewer plays it. Leave the key
+  out and nothing changes. Author the file with the `author-sequence` skill.
 
 Keep background images web-sized — roughly a 2732-px-tall JPEG at quality ~80.
 
@@ -127,6 +133,14 @@ Rules that are easy to get wrong:
 - **Return either an `Object3D` or `{ group }`** — the loader does
   `icon.group ?? icon`.
 - **Implement `dispose()`**; icons are unloaded whenever the user switches.
+- **If the pack has a sequence and your icon uses a raw `ShaderMaterial`, add
+  `setFade(v)`** (0–1) to the returned object and multiply `v` into your
+  output alpha with `transparent: true`. The loader forwards it as
+  `api.setFade`. Standard materials need nothing — the viewer fades them
+  itself; with neither, the fade channel is dropped and the console warns once.
+- **Never write `rotation` from a sequence, and do not expect one to.** Your
+  controller owns spin; the sequence animates a wrapper Group around your
+  object (`AGENT.md` §12).
 - **Filenames with spaces are fine** inside a pack (verified: a background
   named `dusk sky.jpg` and a folder named `big gem` both resolve). The cache
   key and the service-worker lookup normalize identically. Do not rename to
@@ -143,7 +157,10 @@ Stdlib Python 3, no install. It checks the entry module, that your
 `component.js` still matches the repo's copy, the manifest shape, that every
 listed icon has `src/index.js` exporting both required functions, that
 background paths exist in the pack, and warns about unlisted icon folders and
-oversized assets. Exit 0 = clean, 1 = errors, 2 = could not open.
+oversized assets. With a `sequence:` key it also checks the file exists and
+validates its structure — that part needs PyYAML (`pip install pyyaml`, or run
+it with an interpreter that has it); without PyYAML it warns and skips only
+the sequence. Exit 0 = clean, 1 = errors, 2 = could not open.
 
 ## Step 5 — package
 
@@ -203,6 +220,11 @@ const c = window.viewer.component;
 c.api.update(0.5); c.api.update(0.5);   // one second
 c.api.object.rotation.y;
 ```
+
+If the pack has a sequence, the icon starts at its t=0 pose (faded out, 48 %
+scale in the example) and a hidden pane never advances it — scrub instead:
+`window.viewer.sequence.seek(3.0)` shows the held final frame (`AGENT.md`
+§12.7 has the full checklist).
 
 Only one pack is resident at a time — loading a new zip or unloading clears the
 whole `zipfs` cache.

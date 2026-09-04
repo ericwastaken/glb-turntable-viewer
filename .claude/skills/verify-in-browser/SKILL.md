@@ -1,6 +1,6 @@
 ---
 name: verify-in-browser
-description: Serve this static viewer and confirm something actually works in a real browser — including how to test animation deterministically, since a hidden or headless pane pauses requestAnimationFrame and makes working code look broken. Use before claiming that a component, sidecar, icon pack, or URL you put together is done.
+description: Serve this static viewer and confirm something actually works in a real browser — including how to test animation and pack sequences deterministically, since a hidden or headless pane pauses requestAnimationFrame and makes working code look broken. Use before claiming that a component, sidecar, icon pack, sequence, or URL you put together is done.
 ---
 
 # Verifying it in the browser
@@ -30,7 +30,7 @@ harnesses that read launch configs.
 | `/?model=models/DamagedHelmet.glb` | Model loading by path |
 | `/?model=models/DragonAttenuation.glb&sidecar=sidecars/example-emerald-glass.json` | Sidecar match + apply |
 | `/?component=./components/example-shader-orb.js` | Single-file component |
-| `/?component=./components/example-pack/component.js` | Pack loader + pack mode, without the zip layer |
+| `/?component=./components/example-pack/component.js` | Pack loader + pack mode + the example sequence, without the zip layer |
 | `/?pivot=0,0.5,0` | Manual spin axis |
 | `/?bg=backgrounds/starfield-default.jpg` | Background by path |
 
@@ -43,11 +43,13 @@ Defined at the bottom of `index.html`:
 
 ```js
 window.viewer = { THREE, scene, camera, renderer, pivot, controls,
-                  get model(), get component() };
+                  get model(), get component(), get sequence() };
 ```
 
-`viewer.component` is `{ name, api, kind }` — `kind` is `'object'` or
-`'material'`, and `api` is literally what `createComponent()` returned.
+`viewer.component` is `{ name, api, kind, root, seq }` — `kind` is `'object'`
+or `'material'`, `api` is literally what `createComponent()` returned, `root`
+is what sits under the pivot (the object, or the wrapper Group a sequence
+animates), and `seq` (also `viewer.sequence`) is the running sequence or `null`.
 
 ```js
 const c = window.viewer.component;
@@ -93,6 +95,39 @@ c.api.object.rotation.y;    // e.g. 0.8 for a controller doing t * 0.8
 
 The same applies to `mixer` playback and anything else the render loop drives.
 If you must confirm the loop itself runs, do it in a visible window.
+
+### Pack sequences: scrub, don't wait
+
+A pack with a `sequence.yml` starts at its t=0 pose — typically the icon faded
+out and small, no copy yet — and only the render loop advances it. In a hidden
+pane that pose *stays*, which looks like "the icon never appeared". Drive it:
+
+```js
+const v = window.viewer, s = v.sequence, c = v.component;   // s is null without a sequence
+s.duration;                                     // e.g. 3
+s.pause(); s.seek(0);
+c.root.scale.x;                                 // 0.52 — the wrapper Group, not the icon
+c.api.object.material.opacity;                  // 0 (fallback fade on a standard material)
+document.querySelectorAll('#fg .fg-pip.on').length;             // 1
+s.seek(1.0);
+document.querySelector('#fg [data-seq="line1"]').style.clipPath; // mid-wipe, e.g. 'inset(0px 2.56% 0px 0px)'
+s.seek(3.0);
+document.querySelector('#fg [data-seq="cta"]').style.opacity;    // '1'
+s.seek(10); s.time;                             // 3 — `end: hold`
+```
+
+Two things a sequence must never change — assert them:
+
+```js
+const r = c.api.object.rotation.y; s.seek(2); s.seek(0); c.api.object.rotation.y === r;  // spin is the controller's
+const cam = v.camera.position.clone(); s.seek(0); cam.equals(v.camera.position);          // framing solved at rest, once
+```
+
+A pack **without** `sequence:` must be untouched: `v.sequence === null`,
+`document.getElementById('fg').children.length === 0`, and neither
+`sequence.js` nor `animejs.esm.min.js` appears in
+`performance.getEntriesByType('resource')`. After `⏏ Unload`, `#fg` is empty
+again and `v.sequence` is `null`.
 
 ## 5. Testing the zip / service-worker path
 

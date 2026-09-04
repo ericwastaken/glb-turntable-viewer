@@ -1,0 +1,121 @@
+# sequence.yml — entrance choreography for this pack (AGENT.md §12).
+#
+# Named from icons.yml (`sequence: sequence.yml`). The viewer plays it; the
+# pack loader only reads it. All times are SECONDS. The sequence never owns
+# spin: each icon's own controller keeps assigning rotation every frame, so
+# there is no rotation channel here — only the entrance (fade / scale / rise on
+# the 3D icon, and the 2D copy + call-to-action drawn over the canvas).
+#
+# Comments are the point of YAML here: when a timing changes in review, say
+# why next to the number.
+
+version: 1
+
+# --- named easing curves ---------------------------------------------------------
+# Named for what they DO, so "the whole entrance feels abrupt" is a one-line
+# change here rather than a hunt through the tracks below. Any Anime.js easing
+# name works (outCubic, inOutQuart, …), or cubic-bezier(a, b, c, d).
+ease:
+  swell:   &ease-swell   outCubic     # things that grow into place
+  resolve: &ease-resolve outQuart     # things that sharpen into place
+
+# --- capabilities this sequence needs ---------------------------------------------
+# The icon fade needs either a setFade(v) on the icon object or standard
+# materials the viewer can fade for you (both example icons have the latter).
+# If neither is available the fade channel is dropped, everything else plays,
+# and the console says so once.
+requires:
+  icon.fade:
+    degrade: scale-only
+
+# --- what this sequence is allowed to touch ------------------------------------
+# Every name used in a track must be declared here. `top`/`left` are viewport
+# fractions for the element's CENTER (like the component `framing`), `size` is
+# the font size as a fraction of the viewport's shorter side (so a line that
+# fits a landscape desktop still fits a portrait phone).
+stage:
+  hud:
+    pips: { type: pips, top: 0.13, size: 0.018 }
+  icon:
+    ref: current                     # applies to whichever icon is showing
+  overlay:
+    line1: { type: text, top: 0.72, size: 0.05, weight: 700, tracking: 0.10 }
+    line2: { type: text, top: 0.79, size: 0.05, weight: 700, tracking: 0.10 }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff" }
+
+# --- state at frame 0 ----------------------------------------------------------
+# Not animation: the pips are present, fully formed, with the first one
+# filled, and never animate in. A state lives here, not as a zero-length track.
+initial:
+  pips: { filled: 1, total: 3 }
+
+steps:
+
+  # A step with no `icon:` is the default for every icon in the pack. The
+  # anchor lets the second step below reuse the exact same choreography with
+  # its own copy — the choreography is the step; the icon and copy are the
+  # variables.
+  - id: intro
+    copy:
+      line1: "FIRST LINE OF COPY"
+      line2: "SECOND LINE OF COPY"
+
+    timeline: &entrance
+
+      # ICON ENTRANCE — one gesture, two channels. They share a `timing:` so
+      # nobody can retune the fade and desync it from the scale by accident.
+      - id: icon-entrance
+        target: icon
+        at: 0.2
+        timing: { dur: 0.7, ease: *ease-swell }
+        channels:
+          fade:  [0, 1]
+          scale: [0.52, 1]
+
+      # COPY — two identical gestures down a list, staggered. Written as ONE
+      # track because "identical but staggered" is a fact about the design.
+      # blur + wipe is the current GUESS at the reveal mechanism; see the
+      # `wipe` channel notes in AGENT.md §12.
+      - id: copy-resolve
+        target: [line1, line2]
+        at: 0.4
+        stagger: 0.55
+        timing: { dur: 1.0, ease: *ease-resolve }
+        channels:
+          blur: [12, 0]          # px
+          wipe: [0, 1]           # left-to-right reveal
+          fade: [0, 1]
+
+      # A named time (= when copy-resolve ends, 2.0 s) so the call-to-action is
+      # described relative to the copy instead of as a bare number.
+      - label: copy-settled
+
+      # CALL TO ACTION — fades and rises with a glow, 0.8 s after the copy
+      # settles. Retiming the copy carries it along.
+      - id: cta-in
+        target: cta
+        at: copy-settled + 0.8
+        timing: { dur: 0.2, ease: *ease-swell }
+        channels:
+          fade:  [0, 1]
+          rise:  [14, 0]         # px, starts below its rest position
+          bloom: [0, 1]          # 0–1 intent; the viewer maps it to a glow
+
+    # Tapping the call-to-action replays the entrance. (Phase 1 verbs: replay,
+    # nothing.)
+    on:
+      cta.tap: { do: replay }
+
+    # No exit and no transition: hold the final frame.
+    end: hold
+
+  # Same choreography, different copy, for one specific icon.
+  - id: intro-gem
+    icon: gem
+    copy:
+      line1: "A SECOND ICON"
+      line2: "THE SAME CHOREOGRAPHY"
+    timeline: *entrance
+    on:
+      cta.tap: { do: replay }
+    end: hold
