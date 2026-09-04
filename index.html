@@ -117,15 +117,18 @@
 <div id="app"></div>
 
 <div id="hud">
+  <!-- A row's value is its identity, not its path: the same dragon appears
+       twice (with and without a sidecar), and select.value must round-trip to
+       the row the user picked. The file to load is data-model. -->
   <select id="modelSelect" title="Pick a bundled model">
-    <option value="models/DragonAttenuation.glb">Glass dragon (transmission)</option>
-    <option value="models/DragonAttenuation.glb" data-sidecar="sidecars/example-emerald-glass.json">Glass dragon + example sidecar (emerald)</option>
-    <option value="models/MosquitoInAmber.glb">Mosquito in amber (deep glass volume)</option>
-    <option value="models/GlassVaseFlowers.glb">Glass vase with flowers</option>
-    <option value="models/GlassHurricaneCandleHolder.glb">Glass hurricane candle holder</option>
-    <option value="models/IridescentDishWithOlives.glb">Iridescent glass dish</option>
-    <option value="models/DispersionTest.glb">Dispersion test (prism glass)</option>
-    <option value="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
+    <option value="dragon" data-model="models/DragonAttenuation.glb">Glass dragon (transmission)</option>
+    <option value="dragon-emerald" data-model="models/DragonAttenuation.glb" data-sidecar="sidecars/example-emerald-glass.json">Glass dragon + example sidecar (emerald)</option>
+    <option value="mosquito" data-model="models/MosquitoInAmber.glb">Mosquito in amber (deep glass volume)</option>
+    <option value="vase" data-model="models/GlassVaseFlowers.glb">Glass vase with flowers</option>
+    <option value="hurricane" data-model="models/GlassHurricaneCandleHolder.glb">Glass hurricane candle holder</option>
+    <option value="dish" data-model="models/IridescentDishWithOlives.glb">Iridescent glass dish</option>
+    <option value="dispersion" data-model="models/DispersionTest.glb">Dispersion test (prism glass)</option>
+    <option value="helmet" data-model="models/DamagedHelmet.glb">Damaged helmet (PBR classic)</option>
   </select>
   <label class="file">Load .glb / .json / .js / .zip / image…<input type="file" id="filePick" accept=".glb,.gltf,.json,.js,.zip,.png,.jpg,.jpeg,.webp" multiple></label>
   <span class="grp" id="pivotWrap">Pivot
@@ -253,6 +256,8 @@ scene.add(pivot);
 const loader = new GLTFLoader();
 let current = null;      // THREE.Group holding the loaded model
 let mixer = null;        // plays animations embedded in the GLB, if any
+let animCount = 0;       // how many clips we started on it (the mixer's own
+                         // action list is private, so we keep the count)
 let baseLabel = '';
 
 const params = new URLSearchParams(location.search);
@@ -598,7 +603,10 @@ async function activateComponent(mod, name, assetPath) {
 // While a pack (usually from a dropped zip) is active, the model dropdown
 // lists ONLY the pack's icons plus one entry to unload and return to the
 // bundled samples. The original dropdown is restored on unload.
-let zipState = null;   // { label, savedHTML, savedValue, icons: {name: builder} | null }
+// `source` is how the pack arrived — 'zip' for a dropped file, 'pack' for a
+// folder loaded with ?component=. It is the word the status line and the
+// unload entry use, so a pack loaded by URL is never called a zip.
+let zipState = null;   // { source, label, savedHTML, savedValue, savedSpin, icons }
 
 function swapDropdown(label, iconNames) {
   if (!zipState.savedHTML) {
@@ -614,16 +622,28 @@ function swapDropdown(label, iconNames) {
   }
   const u = document.createElement('option');
   u.value = '__unloadzip__';
-  u.textContent = '⏏ Unload zip (back to samples)';
+  u.textContent = `⏏ Unload ${zipState.source} (back to samples)`;
   modelSelect.appendChild(u);
   if (iconNames.length) modelSelect.value = 'zipicon:' + iconNames[0];
+}
+
+// A pack owns its own motion, materials, and framing, so the turntable and
+// sidecar controls are hidden and the spin slider is zeroed while one is
+// loaded. Both load paths call this, so pack mode looks the same either way.
+// Idempotent: the user's spin is remembered only on the first call.
+function enterPackMode() {
+  if (zipState.savedSpin === undefined) zipState.savedSpin = $('speed').value;
+  $('speed').value = 0;
+  document.body.classList.add('zipmode');
 }
 
 async function enterPack(label, icons) {
   const names = Object.keys(icons);
   if (!names.length) { status.textContent = `${label}: the pack lists no icons.`; return; }
-  zipState = zipState ?? { label, savedHTML: null, savedValue: null, icons: null };
+  // No zipState yet means this pack came from ?component=, with no zip involved.
+  zipState = zipState ?? { source: 'pack', label, savedHTML: null, savedValue: null, icons: null };
   zipState.icons = icons;
+  enterPackMode();
   swapDropdown(label, names);
   await activatePackIcon(names[0]);
 }
@@ -718,12 +738,8 @@ async function loadZipFile(f) {
   status.textContent = `Loading ${f.name}…`;
   try {
     const mod = await import(base + entry);
-    zipState = { label: f.name, savedHTML: null, savedValue: null, icons: null,
-                 savedSpin: $('speed').value };
-    // A pack is expected to bring its own motion (controllers, timelines),
-    // so the turntable spin is zeroed while a zip is loaded.
-    $('speed').value = 0;
-    document.body.classList.add('zipmode');
+    zipState = { source: 'zip', label: f.name, savedHTML: null, savedValue: null, icons: null };
+    enterPackMode();   // a dropped zip is package-owned even if it holds no icons
     await activateComponent(mod, f.name, base);
     if (!zipState.icons) swapDropdown(f.name, []);   // non-pack zip: still offer the unload entry
   } catch (err) {
@@ -788,17 +804,16 @@ $('compChip').onclick = () => { if (zipState) unloadZip(true); else unloadCompon
 
 // --- model loading -----------------------------------------------------------
 function refreshStatus() {
-  const anims = mixer ? mixer._actions.length : 0;
   const sc = overrideMats.size
     ? ($('ovToggle').checked ? ` • sidecar ${sidecarName} ON` : ` • sidecar ${sidecarName} off (as exported)`)
     : (sidecarSpec ? ` • sidecar ${sidecarName} matches no meshes` : '');
   const comp = component
-    ? (zipState ? ` • zip ${zipState.label}` : ` • component ${component.name} (${component.kind})`)
+    ? (zipState ? ` • ${zipState.source} ${zipState.label}` : ` • component ${component.name} (${component.kind})`)
     : '';
   const shown = component?.kind === 'object' ? component.name : baseLabel;
   const drag = component?.api.pointer ? 'drag to spin the icon' : 'drag to orbit';
   status.textContent = `${shown} • ${drag}, wheel/pinch to zoom` + comp +
-    (anims ? ` • ${anims} embedded animation${anims > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
+    (animCount ? ` • ${animCount} embedded animation${animCount > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
 
 function setModel(gltf, label) {
@@ -806,6 +821,7 @@ function setModel(gltf, label) {
   unloadComponent();   // a fresh model starts clean; reload the component after if wanted
   if (current) { pivot.remove(current); current.traverse(o => { o.geometry?.dispose?.(); }); }
   mixer = null;
+  animCount = 0;
   originalMats.clear();
   current = gltf.scene;
   // Hide backdrop/stage meshes some sample models ship with — we only want the hero.
@@ -817,6 +833,7 @@ function setModel(gltf, label) {
   if (gltf.animations?.length) {
     mixer = new THREE.AnimationMixer(current);
     gltf.animations.forEach(clip => mixer.clipAction(clip).play());
+    animCount = gltf.animations.length;
   }
   baseLabel = label;
   prepareSidecar();   // re-match the (sticky) sidecar against the new meshes
@@ -841,13 +858,17 @@ let paused = false;
 pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; };
 
 const modelSelect = $('modelSelect');
+// A row's value identifies the row; the file it loads is data-model. Rows added
+// at runtime for custom loads carry the URL in value itself and have no
+// data-model, so this covers both.
+const modelSrc = opt => opt.dataset.model || opt.value;
 modelSelect.onchange = () => {
   const v = modelSelect.value;
   if (v === '__unloadzip__') { unloadZip(true); return; }
   if (v.startsWith('zipicon:')) { activatePackIcon(v.slice(8)); return; }
   const opt = modelSelect.selectedOptions[0];
   if (opt.dataset.sidecar) loadSidecarURL(opt.dataset.sidecar);
-  loadURL(opt.value, opt.textContent);
+  loadURL(modelSrc(opt), opt.textContent);
 };
 
 $('pivotSelect').onchange = () => applyPivot();
@@ -880,10 +901,11 @@ async function handleFiles(files) {
   if (img) setCustomBackground(URL.createObjectURL(img), img.name);
   if (json) {
     try {
-      const res = lintSidecar(await json.text());
+      const text = await json.text();
+      const res = lintSidecar(text);
       if (!res.ok) { status.textContent = `Sidecar ${json.name} has errors — open Sidecar… to fix.`; }
       setSidecar(res.spec ?? null, json.name);
-      if (res.spec && !editor.classList.contains('open') && !res.ok) { openEditor(); editorText.value = await json.text(); renderLint(res); }
+      if (res.spec && !editor.classList.contains('open') && !res.ok) { openEditor(); editorText.value = text; renderLint(res); }
     } catch (err) { status.textContent = `Could not read ${json.name}: ${err.message}`; }
   }
   if (model) {
@@ -926,7 +948,8 @@ let pendingComponentPath = params.get('component');
     selectCustom(qs.split('/').pop(), 'URL', qs);
     loadURL(qs, qs.split('/').pop());
   } else {
-    loadURL(modelSelect.value, modelSelect.selectedOptions[0].textContent);
+    const opt = modelSelect.selectedOptions[0];
+    loadURL(modelSrc(opt), opt.textContent);
   }
 })();
 

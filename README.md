@@ -202,7 +202,8 @@ imports and asset paths work untouched; nothing is uploaded anywhere.
 
 Download
 [`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
-(4 KB — two procedural icons, no asset files) and drag it onto
+(5.4 KB — two procedural icons plus the pack's own background; no per-icon
+asset files) and drag it onto
 [the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
 dropdown switches to the pack's icons ("twist" and "gem") plus an
 "⏏ Unload zip" entry. While a pack is loaded, the turntable and sidecar
@@ -271,6 +272,11 @@ Load… button). The model dropdown switches to the pack's icons, plus an
 is loaded the turntable spin, pivot, and sidecar controls hide — the pack owns
 its own motion, materials, and framing. Loading any other model or a new zip
 also exits the pack.
+
+If the pack folder is already on a server, it can also be loaded unzipped with
+`?component=./my-pack/component.js` — handy while you are building it. That
+route behaves the same way (same icon dropdown, same hidden controls); the zip
+is simply what makes the pack portable.
 
 Adding an icon to an existing pack: drop its folder under `icons/`, add its
 name to `icons.json`, re-compress, drag the new zip onto the page.
