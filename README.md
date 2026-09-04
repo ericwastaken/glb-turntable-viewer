@@ -82,8 +82,8 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
   entry plus a `"*"` fallback).
 - **Background**: a 2D image layer behind the transparent canvas, never scene
   geometry, so orbiting the camera can't move it (the same layering a real
-  page uses). Default is `backgrounds/starfield-default.jpg`, a crop of
-  NASA/JPL-Caltech's Spitzer Milky Way mosaic (PIA13932, public domain). The
+  page uses). Default is `backgrounds/starfield-default.jpg`, a synthetic
+  starfield generated for this project (no external assets or licenses). The
   **Stars** checkbox turns it off; drop or pick any `.png/.jpg/.webp` to use
   your own (a chip removes it); `?bg=path/to/image.jpg` works too
   (same-origin only). Packs can ship their own background (see below).
@@ -99,7 +99,7 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 |---|---|
 | `index.html` | The whole page (markup, styles, and module script). |
 | `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment, self-hosted. |
-| `backgrounds/` | `starfield-default.jpg` — NASA/JPL-Caltech Spitzer mosaic crop (PIA13932), public domain, credit NASA/JPL-Caltech. |
+| `backgrounds/` | `starfield-default.jpg` — synthetic starfield (generated, 4096×2732), the default backdrop. |
 | `models/` | Sample models from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets): glass/transmission tests (DragonAttenuation, MosquitoInAmber, GlassVaseFlowers, GlassHurricaneCandleHolder, IridescentDishWithOlives, DispersionTest) plus DamagedHelmet (PBR). |
 
 ## Custom components (looks a sidecar can't describe)

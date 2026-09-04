@@ -140,7 +140,7 @@
   <label class="grp" id="ovWrap" style="display:none" title="Toggle the loaded sidecar's material settings">
     <input type="checkbox" id="ovToggle" checked> Apply sidecar settings
   </label>
-  <label class="grp" id="starsWrap" title="Default starfield backdrop (NASA/JPL-Caltech Spitzer image, public domain)"><input type="checkbox" id="starsToggle" checked> Stars</label>
+  <label class="grp" id="starsWrap" title="Default starfield backdrop (synthetic, generated for this project)"><input type="checkbox" id="starsToggle" checked> Stars</label>
   <button id="bgChip" style="display:none" title="Remove the custom background"><span id="bgName"></span> ✕</button>
   <button id="compChip" style="display:none" title="Unload the custom component"><span id="compName"></span> ✕</button>
   <span id="links">
@@ -218,8 +218,8 @@ scene.add(key);
 
 // --- background layer --------------------------------------------------------
 // The backdrop lives in #bg behind the transparent canvas. Default image:
-// backgrounds/starfield-default.jpg — a crop of NASA/JPL-Caltech's Spitzer
-// Milky Way mosaic (PIA13932), public domain; see README for credit.
+// backgrounds/starfield-default.jpg — a synthetic starfield generated for
+// this project (no external assets, no licenses to credit).
 const DEFAULT_BG = './backgrounds/starfield-default.jpg';
 const bgEl = $('bg');
 const bgState = { stars: true, custom: null, customName: '' };   // the user's choice
