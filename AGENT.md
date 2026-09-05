@@ -95,7 +95,7 @@ loads a zip — a zip arrives only by drop or the file picker (§7).
 | `?component=` | Relative path to an ES module | `?component=./components/example-shader-orb.js` | **Same-origin only** — `loadComponentURL()` rejects any other origin outright with a status-line message. Loaded **after** the model finishes loading, so `?model=…&component=…` works for a `{ material }` component. |
 | `?bg=` | Relative path to an image | `?bg=backgrounds/starfield-default.jpg` | **Same-origin only** — a cross-origin value is refused and the default backdrop stays. A component's or pack's own background overrides this while loaded. |
 | `?ui=` | `0` (also `none` / `off` / `false` / `hide`) | `?ui=0` | **Bare mode**: hides every viewer control — the picker, the buttons, the sequence transport, the status line, the drop hint, the links — leaving only the background layer, the canvas and a sequence's overlay. The elements stay in the DOM with their values intact, so anything reading `#speed`, `#modelSelect` or the transport still works; drag, zoom and taps are unaffected. Use it to show a pack as the page it is meant to be, and for clean screenshots and recordings. Any other value keeps the full UI. |
-| `?dev=` | `1` (or any value except `0`/`off`/`false`/`no`); `all` and `mobile` widen it; **comma-separated flags compose** | `?dev=1`, `?dev=1,mobile`, `?dev=mobile,all` | **Author mode.** Re-fetches `sequence.js` on every load (a token on the dynamic import — `import()` takes no cache option), **ignores a pack's saved `resume:` step** without deleting it, and shows a DEV badge. `?dev=all` also re-fetches the pack loader and every icon module, which re-downloads the whole pack each reload. `?dev=mobile` adds the **emulated phone stage** (§12.14 / below). **It cannot reach `index.html` or the vendored modules** — those are fetched before any of this code runs, and are `import`ed statically through the import map. For those, serve with the `viewer-dev` launch config (§3), which sends `Cache-Control: no-store`. A pack's `icons.yml` and `sequence.yml` are ALWAYS fetched `no-store`, dev mode or not: they are a few KB and are edited constantly. |
+| `?dev=` | `1` (or any value except `0`/`off`/`false`/`no`); `all` and `mobile` widen it; **comma-separated flags compose** | `?dev=1`, `?dev=1,mobile`, `?dev=mobile,all` | **Author mode.** Re-fetches `sequence.js` on every load (a token on the dynamic import — `import()` takes no cache option), **ignores a pack's saved `resume:` step** without deleting it, and shows a DEV badge. `?dev=all` also re-fetches the pack loader and every icon module, which re-downloads the whole pack each reload — this is now actually wired (the flag was read and then never used; see `packToken()`), and it composes with the per-attempt retry token of §10.17. `?dev=1` additionally **logs every load phase with its timing** to the console — manifest, sequence file, each icon module, each icon's assets, the background, the sequence runtime — so a stalled resource is identifiable without opening a network tab (`viewer.load.log` is the same data). `?dev=mobile` adds the **emulated phone stage** (§12.14 / below). **It cannot reach `index.html` or the vendored modules** — those are fetched before any of this code runs, and are `import`ed statically through the import map. For those, serve with the `viewer-dev` launch config (§3), which sends `Cache-Control: no-store`. A pack's `icons.yml` and `sequence.yml` are ALWAYS fetched `no-store`, dev mode or not: they are a few KB and are edited constantly. |
 | `?orientation=` | `portrait` / `landscape` / `any` (also `0`/`off`/`false`/`no` = `any`) | `?orientation=any` | **Overrides a sequence's `orientation:`** (§12.14) for this load. `any` is how you switch a pack's rotation lock off to review it the other way up; naming an orientation applies the lock even to a sequence that declared none. Anything else is ignored and the sequence's own declaration stands. |
 | `?pivot=` | Exactly three comma-separated finite numbers, `x,y,z`, in model units | `?pivot=0,0.5,0` | Forces the spin axis, overriding the Pivot dropdown. The model is positioned at the negation of this vector. Anything that is not three finite numbers (`?pivot=0,0.5`, `?pivot=a,b,c`) is **silently ignored** and the dropdown's mode applies. |
 
@@ -366,6 +366,9 @@ loading:                                  # optional, the loading curtain
   ground: "#0b0d16"                       #   a CSS colour for the layer
   image: loading/mark.png                 #   optional, centred, inside the pack
   animation: pulse                        #   pulse (default) | none
+  slowAfter: 15                           #   seconds before it says it is slow
+  failAfter: 45                           #   seconds before it gives up, names
+                                          #   the resource and offers Retry
 ```
 
 - `icons` — **required**, non-empty list of folder names under `icons/`. An
@@ -390,21 +393,72 @@ loading:                                  # optional, the loading curtain
   an icon with no entry gets one **derived** by the viewer, so this key is
   never required (§12.6).
 
-- `loading` — optional appearance for the **loading curtain**: the opaque
-  layer that is up from the first paint and comes down the instant step 1 of a
-  sequence can draw (its t=0 pose applied). Three keys only — `ground` (a CSS
-  colour), `image` (a path inside the pack, centred and contained) and
-  `animation` (`pulse`, the default, or `none`). **There is no spinner and no
-  progress bar**, because there is no progress to report: the rest of the pack
-  (every other icon, and every derived glyph) keeps loading *behind* the lifted
-  curtain, which is the difference between a first frame in a few hundred
-  milliseconds and one in several seconds. A pack that declares nothing gets
-  the viewer's own quiet default: a near-black ground and a soft pulsing disc.
-  Both the default and a declared animation hold still under
-  `prefers-reduced-motion`. Measured on the example pack with `?dev=all` (so
-  every icon module is a real fetch): the curtain lifted at **124.7 ms**, the
-  third icon's module only arrived at **157.5 ms**, and `sequence.ready`
-  settled at **162.9 ms**.
+- `loading` — optional settings for the **loading curtain**: the opaque layer
+  that is up from the first paint and comes down the instant step 1 of a
+  sequence can draw (its t=0 pose applied, backdrop included). Five keys.
+
+  Three are **appearance** — `ground` (a CSS colour), `image` (a path inside
+  the pack, centred and contained) and `animation` (`pulse`, the default, or
+  `none`). A pack that declares nothing gets the viewer's own quiet default: a
+  near-black ground and a soft pulsing disc. Both the default and a declared
+  animation hold still under `prefers-reduced-motion`.
+
+  Two are **patience**, in seconds: `slowAfter` (default **15**) and
+  `failAfter` (default **45**). Every network read in the load path is on
+  those two thresholds — the manifest, the sequence file, each icon module,
+  each icon's own asset loaders, the backdrop, the sequence runtime and a
+  `?model=`. Past `slowAfter` the curtain says it is still loading and **names
+  what it is waiting on**; past `failAfter` it stops waiting on that resource,
+  names it, and shows a **Retry**. `slowAfter` must be less than `failAfter`
+  or the slow state can never appear; `validate-pack.py` says so. Only the
+  manifest fetch itself is judged by the viewer's defaults, because the file
+  that declares the thresholds is the file being waited for.
+
+  **There is a progress line, and it is a COUNT, never a percentage** —
+  "Loading 3 of 6 — icons/gem/src/index.js". The viewer knows how many
+  resources the first draw needs; it does not know how many bytes each one is,
+  and will not invent a number it cannot compute.
+
+  **What the first draw waits for**: the manifest, the sequence file, the
+  **first step's icon**, and the **pack background**. Nothing else. The other
+  icons and their derived glyphs are acquired *after* the curtain is down and
+  a frame is painted, not beside it — see *Deferred preload* below.
+
+  Measured on the example pack with `?dev=all` (so every icon module is a real
+  fetch): the curtain lifted at **124.7 ms**, the third icon's module only
+  arrived at **157.5 ms**, and `sequence.ready` settled at **162.9 ms**.
+
+### Deferred preload — what loads when, and why
+
+A pack's first draw needs two things off the network: the icon the first step
+shows, and the backdrop behind it. Everything else in the pack belongs to steps
+nobody has reached.
+
+Those two are fetched **together and first**. Every other icon is acquired only
+once step 1 is on screen and a frame has been painted. Before this they were
+started the moment the sequence compiled — in parallel with the very bytes the
+curtain was waiting for, on the same link.
+
+Measured on a deliberately throttled 250 KB/s link, with a 5.8 MB pack
+(687 KB backdrop, 662 KB first icon, 2.25 MB each for the other two):
+
+| | before | after |
+|---|---|---|
+| curtain lifts | 5.20 s — onto a bare ground | **7.60 s** — complete |
+| backdrop actually arrives | 10.17 s | **7.49 s** |
+| second icon's module starts | 4.62 s (racing the backdrop) | 7.99 s (after the first draw) |
+| whole pack ready | 26.0 s | 26.5 s |
+
+So the *complete* first picture is **2.6 s earlier**, and the curtain no longer
+lifts onto an unfinished one. The total is unchanged, as it must be — the same
+bytes still cross the same link.
+
+The guarantee this leans on: **a tap never stalls silently.** If a step is
+reached before its icon has been acquired, the flow HOLDS — the curtain comes
+back up naming the icon, and the step advances the moment it arrives (or shows
+the same named failure with a Retry if it does not). It does not throw, and it
+does not quietly do nothing. Two callers asking for the same icon share one
+build.
 - **With `?component=` and no `?model=`, no sample model is loaded at all.**
   An `{ object }` component — every pack is one — replaces the model outright,
   so the boot used to download and render a model nobody ever saw and then swap
@@ -571,8 +625,9 @@ of a code read.
 `index.html`:
 
 ```js
-window.viewer = { THREE, scene, camera, renderer, pivot, controls,
-                  get model(), get component(), get sequence() };
+window.viewer = { THREE, scene, camera, renderer, pivot, controls, stage,
+                  get model(), get component(), get sequence(),
+                  get curtain(), get orientation(), get load(), retry(), devStage };
 ```
 
 `viewer.component` is `{ name, api, kind, root, seq }` where `kind` is
@@ -580,6 +635,28 @@ window.viewer = { THREE, scene, camera, renderer, pivot, controls,
 `root` is what sits under the pivot (`api.object`, or the wrapper Group a
 sequence animates), and `seq` is the running sequence or `null`.
 `viewer.sequence` is the same `seq` (§12).
+
+### The load, and what the curtain is saying
+
+```js
+viewer.curtain;      // { up, reason, state, message }
+                     //   reason  'loading' | 'orientation' | null   (which layer)
+                     //   state   'loading' | 'slow' | 'failed' | null (what it says)
+                     //   message the exact text on it, or null
+viewer.load.failed;  // { label, detail } — the resource that did not arrive, or null
+viewer.load.limits;  // { slowAfter, failAfter } in force (a pack may retune both, §7)
+viewer.load.log;     // [{ label, ms, how }] — every phase of this load, ?dev= prints it
+viewer.retry();      // press the curtain's Retry, for a scripted check
+```
+
+Assert against these rather than against pixels: `curtain.state === 'failed'`
+and `load.failed.label` are the thing the code is actually in, and they are
+identical in bare mode (`?ui=0`), where there is no status line to read.
+
+`viewer.load.log` is also the answer to "which resource is the slow one" —
+it names each phase with its wall time, so a stall is identifiable from the
+console with no network tab. It is printed as it happens under `?dev=1` and
+stays silent otherwise.
 
 ### Your component
 
@@ -710,7 +787,11 @@ emulation they are different numbers and only one of them is what the app used.
 | **"Nothing I set survives a reload."** | There is no persistence at all | §11 — put it in the URL (§4) |
 | **"My icon is invisible / tiny after the pack loads"** in a pane | The pack has a sequence, whose t=0 pose is faded-out and small; a hidden pane never advances it | §10.13 — `viewer.sequence.seek(t)` |
 | **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer, a `to:` that names nothing, a `portrait:` key that is not a placement key | §12 — the message names the track |
-| **"The page is a flat colour and nothing ever appears."** | The loading curtain never came down — the pack failed before step 1 could draw | Read `#status`: every failure path lowers it and reports there (§7, §10.8) |
+| **"The page is a flat colour and nothing ever appears."** | The loading curtain never came down — the pack failed before step 1 could draw | The curtain itself says which resource, past `failAfter`, with a Retry (§7). If it says nothing at all after 45 s, the page is older than that or the deadline was retuned |
+| **"It never launches on a phone / over a relay, but every file returns 200."** | A connection that is accepted and never answered. Every read is now deadlined | §7 `loading.slowAfter` / `failAfter`; §10.17 for why the *retry* also needed fixing |
+| **"The curtain says 'Loading 4 of 6' and stops there."** | That resource is the one that has not arrived. The count is resources, not bytes | Wait for `slowAfter` — it will name it. `?dev=1` logs every phase with timings (§8) |
+| **"Retry does nothing."** | An `import()` that stalled is remembered by URL, so a retry at the same URL re-attaches to the dead promise | §10.17 — the fix is a per-attempt URL token, which the viewer now adds |
+| **"A later step's tap seems to do nothing."** | Its icon has not been acquired yet; the flow holds rather than throwing | §7 *Deferred preload* — the curtain names the icon |
 | **"A rotate glyph appeared and everything stopped."** | The sequence declares an `orientation:` this stage does not satisfy | §12.14 — `?orientation=any` reviews it the other way up |
 | **"My swipe rotates the icon instead of advancing."** | It was too slow, too diagonal, or too short to classify as a swipe | §12.13 — the thresholds are `input.swipe` |
 | **"Scroll no longer zooms in my pack."** | `input.zoom` defaults to **false** for a sequence — a pack composes a fixed frame | §12.13 — say `zoom: true` if you want it |
@@ -853,6 +934,37 @@ emulation they are different numbers and only one of them is what the app used.
     slot row and a call-to-action authored on a desktop read as specks on a
     phone. That is what `portrait:` (§12.15) is for. Do not try to derive a
     correction factor — the right mobile proportions are a design decision.
+
+17. **A stalled `import()` cannot be retried at the same URL.** The browser's
+    module map is keyed by URL and keeps a **pending** record for a module
+    whose request never answered. A second `import()` of that exact URL
+    returns the same dead promise and *never issues a second request* —
+    measured: one line in the server log for two attempts, the second
+    "attempt" failing at the same deadline while the server was already
+    answering. Anything retryable therefore carries a token that changes per
+    attempt: the viewer appends `?retry=<n>` (composed with `?dev=all`'s own
+    token in `packToken()`), and hands it to the pack loader so icon modules
+    get it too. If you add a module import to the load path, put the token on
+    it, or you have built a retry that cannot work.
+
+18. **`fetch()` and `import()` have no timeout of their own.** Neither ever
+    rejects because "it is taking too long" — a connection that is accepted
+    and then never answered leaves the promise pending for the life of the
+    page. That is not a slow load, it is a load with no end, and it is what
+    made a whole pack "never launch" while every file in it returned 200 when
+    asked for directly. A `fetch()` needs an `AbortController` plus a timer; an
+    `import()` cannot be aborted at all, so it must be **raced** against one
+    and the loser turned into a reported failure. Both live in
+    `components/pack.component.js` (`fetchBy`, `within`) and `index.html`
+    (`withDeadline`).
+
+19. **A CSS background-image is not on any promise.** `applyBackground()` sets
+    `background-image` and returns; nothing waits, nothing reports, and a
+    687 KB backdrop simply appears some seconds later. The curtain used to lift
+    without it, so a slow link showed a lit icon on a bare ground. The viewer
+    now loads it through an `Image` (its `load` event, not `decode()` — decode
+    can sit indefinitely on a page that is not being painted, which is exactly
+    a hidden pane, gotcha 1) and counts it as part of the first draw.
 
 ---
 
@@ -1458,9 +1570,28 @@ the next one come in sooner") is a one-line change. Measured on the example
 pack: the exit ends at 0.70 s, so the incoming entrance begins at 0.35 s and
 the whole transition is 3.35 s.
 
-**Preloading.** Every icon in the pack is built once, up front, behind the
-first step's entrance — and its glyph captured at the same moment — so a tap
-never stalls on a geometry build. `viewer.sequence.ready` is the promise.
+**Preloading — deferred.** Every icon in the pack is built once and its glyph
+captured at the same moment, so a tap never stalls on a geometry build.
+`viewer.sequence.ready` is the promise.
+
+It runs **after the first draw**, not beside it: the host hands the runtime a
+`deferPreload` promise which the viewer resolves once the curtain is down and a
+frame has been painted, and the preload waits on it. Before that, the whole
+pack was fetched in parallel with the one icon and the backdrop the curtain was
+waiting for — on the same link, which is the entire problem on a slow one (§7
+has the measurements).
+
+Two consequences worth knowing:
+
+- **A tap can outrun the preload, and that is handled.** `advance()` holds:
+  `host.waitingFor(name, retry)` puts the curtain back up naming the icon, the
+  step advances the moment it arrives, and a resource that never arrives gets
+  the same named failure and Retry as any other (§7). It does not throw and it
+  does not silently do nothing.
+- **Two callers asking for the same icon share one build.** The tap and the
+  preload routinely collide now; without sharing that is two imports and two
+  geometry builds of the same megabytes.
+
 Icons are singletons for the life of the pack: `restart` returns them to rest
 rather than rebuilding them.
 
@@ -1561,8 +1692,9 @@ s.advance();        // the verbs, for scripted checks — these DO persist
 s.restart();
 s.posed;            // promise: the STARTING STEP can draw (its t=0 pose applied).
                     // This is what the loading curtain waits for (§7)
-s.ready;            // promise: preload + glyph capture done — runs BEHIND the
-                    // lifted curtain, deliberately
+s.ready;            // promise: preload + glyph capture done — starts only once
+                    // the first draw is painted, and runs BEHIND the lifted
+                    // curtain from there (§12.7, §7)
 s.storageKey;       // 'glb-viewer:seq:example-pack', or null when resume is off
 s.saved;            // the parsed stored state, or null
 s.targets;          // ['slot','slot1','slot2','slot3','line1','line2','cta','icon']
@@ -2036,8 +2168,8 @@ CONTRIBUTING.md                background notes for a human contributor (not rul
 `index.html` is ~1,300 lines and, with `sequence.js`, is where all application
 logic lives. Its sections are marked with `// --- name ---` banner comments;
 navigate by those. In rough order: URL parameters → stage → renderer/scene/camera
-→ background layer → curtain → input policy → orientation lock → `?dev=mobile`
-control bar → model + pivot → sidecar → sidecar linter → sidecar editor UI →
+→ background layer → curtain → load monitor → retry tokens → deadlines → the
+first-draw gate → input policy → orientation lock → `?dev=mobile` control bar → model + pivot → sidecar → sidecar linter → sidecar editor UI →
 components → sequences → icon packs / zip mode → zip loading → model loading →
 UI → render loop.
 
@@ -2054,6 +2186,10 @@ Where to look when the docs above are not enough:
 | How big is the picture, and which way up? | the `stage` accessor + `measureStage()` / `applyStage()` in `index.html` (§4) |
 | What happens to zoom / drag / swipe? | `applyInput()` in `index.html`; `readInput()`, `inputNow()` and `trySwipe()` in `sequence.js` (§12.13) |
 | Who owns the curtain and the rotation lock? | `curtain` and `evaluateOrientation()` in `index.html` (§7, §12.14) |
+| Why is my load hanging, and what decides it has failed? | `loadMon` in `index.html`; `fetchBy()` / `within()` in `components/pack.component.js` (§7, §10.18) |
+| Why does my Retry not reach the network? | `packToken()` in `index.html` (§10.17) |
+| What loads before the curtain lifts, and what after? | `applyComponentApi()` and `markFirstDraw()` in `index.html`; `preload()` and `host.deferPreload` in `sequence.js` (§7, §12.7) |
+| Why does the curtain wait for a background image? | `awaitImage()` in `index.html` (§10.19) |
 | What does the viewer support at all? | `README.md`, and §11 above for what it does not |
 
 ---
@@ -2064,8 +2200,20 @@ Where to look when the docs above are not enough:
 `components/pack.component.js` as its `component.js`. It is the same file in
 every pack; all pack-specific behaviour belongs in `icons.yml` and the
 per-icon modules. `validate-pack.py` compares your copy against the repo's and
-reports a drifted copy as an error, so an edited copy will not validate. If you
-find yourself wanting to change it, the change belongs in your icon module.
+reports a drifted copy as a warning, so a drifted copy is visible. If you find
+yourself wanting to change it, the change belongs in your icon module.
+
+The corollary is that **a pack built against an older viewer carries an older
+loader**, and re-copying is how it catches up. An old copy still loads — the
+viewer's extras (`ctx.load`, `ctx.dev`) are optional and a loader that ignores
+them simply gets no deadlines and no per-phase reporting of its own — but it
+will not report which of ITS reads is the slow one, and its icon-module imports
+will not carry the retry token, so a Retry after a stalled icon module cannot
+reach the network (§10.17). Copy the current file in whenever you touch a pack:
+
+```bash
+cp components/pack.component.js my-pack/component.js
+```
 
 **This repo is public.** Anything contributed back — an example pack, a sample
 asset, a component in `components/`, a filename, a colour name, a code

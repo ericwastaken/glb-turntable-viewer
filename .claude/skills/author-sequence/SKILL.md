@@ -301,7 +301,9 @@ Serve (`python3 -m http.server 8000`) and load
 
 ```js
 const v = window.viewer, s = v.sequence, c = v.component;
-await s.ready;              // preload + glyph capture (a flow)
+await s.ready;              // preload + glyph capture (a flow). It does not even
+                            // START until the first draw is painted (AGENT.md §12.7),
+                            // so await it before asserting anything pack-wide.
 s.pause(); s.seek(0);       // wrapper at the entrance's `from` scale, copy hidden
 c.root.scale.x;             // e.g. 0.52 — the WRAPPER; c.api.object.scale is untouched
 s.seek(1.0);  document.querySelector('#fg [data-seq="line1"]').style.clipPath;  // mid-wipe
@@ -321,6 +323,12 @@ s.seek(1.15); s.slots[0].as;                 // 'glyph' — the after: swap
 document.querySelector('#fg [data-seq="cta"]').getBoundingClientRect().top === before.top;  // true
 s.restart(); s.step; s.time; s.slots;        // 'one', 0, [null, null, null]
 ```
+
+`advance()` is asynchronous when the icon it needs is not in yet — the pack's
+later icons are fetched only after the first draw (`AGENT.md` §7). If it seems
+to do nothing, read `v.curtain`: a hold shows `{ up: true, state: 'loading',
+message: 'Loading gem…' }` and the step advances the moment the icon arrives.
+`await s.ready` before a scripted flow check and the question does not arise.
 
 Prove a landed object really is out of the update path — this is the whole
 point of `land.mode: object`:
@@ -363,7 +371,8 @@ s.input;                                     // the policy resolved for the step
 v.stage;                                     // what the app is composing against
 v.devStage.size; v.devStage.flip();          // flip the simulated orientation
 v.orientation;                               // { stage, want, held }
-v.curtain;                                   // { up, reason }
+v.curtain;                                   // { up, reason, state, message }
+v.load.failed; v.load.limits; v.load.log;    // the load monitor (AGENT.md §8)
 // a rotation lock must FREEZE, not skip:
 v.devStage.flip(); const t = s.time;
 // …wait several seconds…

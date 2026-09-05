@@ -90,12 +90,18 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
   (same-origin only). Packs can ship their own background (see below).
 - **Loading curtain**: an opaque layer that is up before the first paint and
   comes down as soon as there is something to see — for a pack with a
-  sequence, the instant its first step can draw; the remaining icons keep
-  loading behind it. A pack can restyle it (`loading:` in `icons.yml`: a
-  ground colour, an optional image, `animation: pulse | none`); the viewer's
-  own default is a near-black ground and a soft pulsing disc. There is no
-  spinner and no progress bar, by decision. It also carries the rotation
-  prompt below.
+  sequence, the instant its first step can draw, backdrop and all. The rest of
+  the pack loads *after* that, not beside it, so the bytes the first picture
+  needs do not share the link with the icons for steps nobody has reached yet.
+  It says what it is doing: a **count** of the resources it is waiting for
+  ("Loading 3 of 6 — …"), never a percentage it cannot compute. Past
+  `slowAfter` (15 s) it admits the link is slow and names what it is waiting
+  on; past `failAfter` (45 s) it gives up on that resource, names it, and
+  offers **Retry**. A pack can restyle it and retune both thresholds
+  (`loading:` in `icons.yml`: a ground colour, an optional image,
+  `animation: pulse | none`, `slowAfter`, `failAfter`); the viewer's own
+  default is a near-black ground and a soft pulsing disc. Everything on it is
+  readable in bare mode (`?ui=0`). It also carries the rotation prompt below.
 - **Lighting**: procedurally generated RoomEnvironment IBL + ACES tone
   mapping, which is what makes PBR/glass materials read correctly.
 - Backdrop/stage meshes bundled inside sample models (names matching
@@ -230,7 +236,7 @@ motion controller.
 my-icons.zip
 ├── component.js       ← the universal pack loader: copy components/pack.component.js, never edit it
 ├── icons.yml          ← icons: [nameA, nameB]   background: backgrounds/sky.jpg   sequence: sequence.yml
-│                        (also optional: loading: { ground, image, animation } — the loading curtain)
+│                        (also optional: loading: { ground, image, animation, slowAfter, failAfter } — the loading curtain)
 ├── sequence.yml       ← optional: how icons ENTER, and how a tap collects them
 ├── backgrounds/       ← optional images referenced from icons.yml
 └── icons/
@@ -470,5 +476,7 @@ viewer will say so rather than fail silently.
   no camera moves, and no `goto` — steps run in order, or restart.
 - The rotation prompt is advisory: browsers do not let a page turn a device,
   and the viewer does not pretend otherwise.
-- The loading curtain reports no progress. A pack's total work is not known in
-  advance, and a fake bar would be worse than a quiet wait.
+- The loading curtain reports a COUNT of resources, not a percentage of bytes.
+  The viewer knows how many things the first draw needs; it does not know how
+  large each is, and a bar it had to invent would be worse than an honest
+  count.

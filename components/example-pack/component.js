@@ -22,7 +22,8 @@
 //                         backgrounds: { nameB: backgrounds/alt.jpg }   optional, per icon
 //                         glyphs: { nameA: glyphs/a.png }               optional, per icon 2D mark
 //                         sequence: sequence.yml                        optional, entrance choreography
-//                         loading: { ground, image, animation }         optional, the loading curtain
+//                         loading: { ground, image, animation,
+//                                    slowAfter, failAfter }    optional, the loading curtain
 //                         (an icons.json with the same keys still loads, but is
 //                          deprecated and will be unsupported in a future version)
 //   sequence.yml          optional — see AGENT.md §12; the viewer plays it, this file only reads it
@@ -41,30 +42,108 @@ function resolveBackground(v) {
 }
 
 // The optional `loading:` block styles the viewer's loading curtain (AGENT.md
-// §7). The loader only resolves the image path — the VIEWER owns the curtain,
-// and it is already up before this file has even been fetched.
+// §7) and sets how patient it is. The loader only resolves the image path and
+// the two thresholds — the VIEWER owns the curtain, and it is already up
+// before this file has even been fetched.
 function resolveLoading(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
   const out = {};
   if (typeof v.ground === 'string' && v.ground.trim()) out.ground = v.ground.trim();
   if (typeof v.image === 'string' && v.image.trim()) out.image = new URL(v.image.trim(), import.meta.url).href;
   if (typeof v.animation === 'string' && v.animation.trim()) out.animation = v.animation.trim();
+  // Seconds. A pack meant for a phone over a relay can afford to wait longer
+  // before saying so; one on a kiosk LAN should give up sooner. Anything that
+  // is not a positive finite number is ignored and the viewer's own defaults
+  // (15 / 45) stand.
+  for (const k of ['slowAfter', 'failAfter']) {
+    const n = Number(v[k]);
+    if (Number.isFinite(n) && n > 0) out[k] = n;
+  }
   return Object.keys(out).length ? out : undefined;
+}
+
+// --- deadlines ----------------------------------------------------------------
+// EVERY network read below used to be unbounded. A link that accepts a
+// connection and then never answers left fetch() and import() promises that
+// simply never settled: nothing failed, so nothing was reported, so the
+// viewer's curtain stayed up for ever with nothing on it. That is the whole
+// bug — the pack was reachable, every file returned 200 when asked for
+// directly, and the page still never launched.
+//
+// The viewer hands us a reporter in `ctx.load`. Without one (another host, an
+// older viewer) the deadlines still apply on the default below and only the
+// reporting is lost.
+const FAIL_AFTER = 45;                    // seconds; the viewer's `slowAfter` is its own affair
+let report = null;
+// The URL token the viewer hands us for a pack's ICON MODULES. It is not just a
+// dev convenience: a dynamic import() is keyed by URL and a stalled one leaves
+// a pending record in the module map for ever, so a retry at the SAME url
+// re-attaches to the dead promise and never issues a second request. The viewer
+// moves this token on with every attempt (and for ?dev=all - AGENT.md §4),
+// which is why it is read per import rather than captured once.
+let bust = () => '';
+const failAfter = () => report?.limits?.().failAfter ?? FAIL_AFTER;
+
+// Register one resource with the viewer. The token MUST be settled: an
+// unsettled one is a resource the curtain thinks it is still waiting for.
+function track(label, counted = true) {
+  const t = report?.begin?.(label, counted);
+  return {
+    ok(v) { t?.ok?.(); return v; },
+    fail(err) { t?.fail?.(err?.message ?? String(err)); throw err; },
+  };
+}
+
+async function fetchBy(url, init, label) {
+  const t = track(label);
+  const ac = new AbortController();
+  const secs = failAfter();
+  const timer = setTimeout(() => ac.abort(), secs * 1000);
+  try {
+    return t.ok(await fetch(url, { ...init, signal: ac.signal }));
+  } catch (err) {
+    t.fail(ac.signal.aborted ? new Error(`no response within ${secs}s`) : err);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// A dynamic import() CANNOT be aborted, and neither can an icon module's own
+// loaders once we have called them. So the deadline is a RACE: the module may
+// still turn up later, but the load stops waiting on it and REPORTS which one
+// it was, which is the difference between a named failure and a silent hang.
+function within(promise, label, counted = true) {
+  const t = track(label, counted);
+  const secs = failAfter();
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no response within ${secs}s`)), secs * 1000); }),
+  ]).then(
+    v => { clearTimeout(timer); return t.ok(v); },
+    e => { clearTimeout(timer); t.fail(e); },
+  );
 }
 
 async function buildIcon(ctx, name, background, sequence, glyph) {
   const base = new URL(`./icons/${name}/`, import.meta.url);
-  const mod = await import(new URL('src/index.js', base).href);
+  const src = `icons/${name}/src/index.js`;
+  const mod = await within(import(new URL('src/index.js', base).href + bust()), src);
 
   if (typeof mod.createIconObject !== 'function' || typeof mod.loadIconGeometry !== 'function') {
-    throw new Error(`icons/${name}/src/index.js must export createIconObject and loadIconGeometry (see the pack spec).`);
+    throw new Error(`${src} must export createIconObject and loadIconGeometry (see the pack spec).`);
   }
 
+  // The icon's OWN loaders are on the deadline too. They are pack-authored code
+  // the loader cannot see inside — a GLTFLoader, a texture fetch, anything —
+  // and a module that hangs in there would hang the pack exactly as a stalled
+  // import does. It is bounded here so that even a third-party icon produces a
+  // reported failure rather than silence.
   const path = new URL('assets/', base).href;
-  const [geometry, textures] = await Promise.all([
+  const [geometry, textures] = await within(Promise.all([
     mod.loadIconGeometry({ path }),
     mod.loadIconTextures ? mod.loadIconTextures({ path, renderer: ctx.renderer }) : Promise.resolve(undefined),
-  ]);
+  ]), `icons/${name}/assets`);
 
   // srgbOutput: false — the viewer renders straight to the canvas with no
   // post-processing (no EffectComposer/OutputPass), and three.js applies no
@@ -142,10 +221,13 @@ const EXAMPLE = 'It should contain e.g.\n\nicons:\n  - myicon';
 async function readManifest() {
   const ymlUrl = new URL('./icons.yml', import.meta.url);
   let res;
-  try { res = await fetch(ymlUrl, NO_STORE); }
+  try { res = await fetchBy(ymlUrl, NO_STORE, 'icons.yml'); }
   catch (err) { throw new Error(`Could not fetch icons.yml next to component.js (${err.message}).`); }
   if (res.ok) {
-    const { load } = await import('js-yaml');
+    // Vendored and tiny, but still a module fetch on the same link, so it gets
+    // the same deadline. Not COUNTED, though: the curtain's "n of m" is about
+    // the pack's own files, not the viewer's machinery.
+    const { load } = await within(import('js-yaml'), 'js-yaml', false);
     const text = await res.text();
     let manifest;
     try { manifest = load(text); }
@@ -155,7 +237,7 @@ async function readManifest() {
 
   const jsonUrl = new URL('./icons.json', import.meta.url);
   let legacy;
-  try { legacy = await fetch(jsonUrl, NO_STORE); } catch { legacy = null; }
+  try { legacy = await fetchBy(jsonUrl, NO_STORE, 'icons.json'); } catch { legacy = null; }
   if (legacy && legacy.ok) {
     console.warn('[pack] icons.json is deprecated and will be unsupported in a future version. Rename it to icons.yml (the same keys work; YAML is a superset of JSON).');
     let manifest;
@@ -177,10 +259,10 @@ async function readSequence(manifest, file) {
   if (typeof rel !== 'string' || !rel.trim()) throw new Error(`${file}: "sequence" must be a relative path such as sequence.yml`);
   const url = new URL(rel, import.meta.url);
   let res;
-  try { res = await fetch(url, NO_STORE); }
+  try { res = await fetchBy(url, NO_STORE, rel); }
   catch (err) { throw new Error(`Could not fetch ${rel} named by ${file} (${err.message}).`); }
   if (!res.ok) throw new Error(`Could not read ${rel} named by ${file} (HTTP ${res.status}).`);
-  const { load } = await import('js-yaml');
+  const { load } = await within(import('js-yaml'), 'js-yaml', false);
   let doc;
   try { doc = load(await res.text()); }
   catch (err) { throw new Error(`${rel} is not valid YAML: ${err.message}`); }
@@ -188,11 +270,34 @@ async function readSequence(manifest, file) {
 }
 
 export async function createComponent(ctx) {
+  // The viewer's load monitor (deadlines + what the curtain says) and its
+  // ?dev=all cache token. Both optional: a host that offers neither still gets
+  // a pack, with the default deadline and no reporting.
+  report = ctx?.load ?? null;
+  // A viewer may hand this over as a function (current) or a plain string (an
+  // older one). Either is fine; nothing here needs to know which.
+  const b = ctx?.dev?.bust;
+  bust = typeof b === 'function' ? b : () => (b || '');
+
+  // What the first draw needs, counted as it becomes known rather than guessed:
+  // the manifest is one, and it is the file that tells us the rest.
+  report?.expect?.(1);
   const { file, manifest } = await readManifest();
   const names = manifest?.icons;
   if (!Array.isArray(names) || names.length === 0) {
     throw new Error(`${file} has no icons listed. ${EXAMPLE}`);
   }
+  const loading = resolveLoading(manifest.loading);
+  // The pack's own thresholds take effect from HERE, so everything after the
+  // manifest is judged by the pack's numbers and only the manifest fetch itself
+  // by the viewer's. There is no way round that ordering: the file that
+  // declares them is the file we were waiting for.
+  report?.declare?.(loading);
+  // A sequence file if one is named, then the FIRST icon's module and its
+  // assets. Only the first: the rest of the pack is acquired after the curtain
+  // lifts (AGENT.md §7). The viewer adds the background itself, because the
+  // viewer is what fetches it.
+  report?.expect?.((manifest.sequence ? 1 : 0) + 2);
   const sequence = await readSequence(manifest, file);
 
   // Always return the icons map — the viewer lists them in its dropdown
@@ -208,8 +313,12 @@ export async function createComponent(ctx) {
     const glyph = typeof glyphs[name] === 'string' ? new URL(glyphs[name], import.meta.url).href : undefined;
     icons[name] = () => buildIcon(ctx, name, bg, sequence, glyph);
   }
-  // `loading` is returned alongside the icons rather than per icon: the viewer
-  // needs it BEFORE the first icon is built, which is the whole point of a
-  // curtain.
-  return { icons, loading: resolveLoading(manifest.loading) };
+  // `loading` and `background` are returned alongside the icons rather than per
+  // icon, because the viewer needs both BEFORE the first icon is built: the
+  // curtain's appearance is the whole point of a curtain, and the backdrop is
+  // part of the first draw, so it should be in flight WITH the first icon
+  // rather than queued behind it. (Each icon still carries its own background
+  // as well — a per-icon override still applies once that icon is active.)
+  const firstBg = resolveBackground(perIcon[names[0]]) ?? packBg;
+  return { icons, loading, background: firstBg };
 }

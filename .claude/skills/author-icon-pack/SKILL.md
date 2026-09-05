@@ -56,6 +56,8 @@ loading:                      # optional — the viewer's loading curtain
   ground: "#0b0d16"           #   a CSS colour for the layer
   image: loading/mark.png     #   optional, centred, must be inside the pack
   animation: pulse            #   pulse (default) | none
+  slowAfter: 15               #   seconds before it says the link is slow
+  failAfter: 45               #   seconds before it gives up and names the resource
 ```
 
 (`icons.json` with the same keys is **deprecated** — it still loads with a
@@ -72,13 +74,26 @@ console warning and will be unsupported in a future version. Rename it to
   is resolved as a path relative to `component.js`.
 - `backgrounds` — optional per-icon overrides, same value rules, falling back
   to `background`.
-- `loading` — optional appearance for the viewer's **loading curtain**: the
-  opaque layer up from the first paint that comes down the moment your pack's
-  first step can draw. `ground` is a CSS colour, `image` a path inside the pack
-  (centred and contained), `animation` is `pulse` (the default) or `none`.
-  Deliberately no spinner and no progress bar — the remaining icons load behind
-  the lifted curtain, so there is nothing to report. A pack that leaves the key
-  out gets the viewer's own quiet default (`AGENT.md` §7).
+- `loading` — the viewer's **loading curtain**: the opaque layer up from the
+  first paint that comes down the moment your pack's first step can draw,
+  **backdrop included**.
+  - Appearance: `ground` is a CSS colour, `image` a path inside the pack
+    (centred and contained), `animation` is `pulse` (the default) or `none`.
+  - Patience, in seconds: `slowAfter` (default 15) and `failAfter` (default
+    45). Every read in the load path is on them — your manifest, your sequence
+    file, each icon module, each icon's own asset loaders, and your backdrop.
+    Past `slowAfter` the curtain names what it is waiting on; past `failAfter`
+    it names it as failed and offers Retry. `slowAfter` must be less than
+    `failAfter`; `validate-pack.py` checks it.
+  - Deliberately no spinner and no percentage. It reports a **count** —
+    "Loading 3 of 6 — icons/gem/src/index.js" — because that is a number the
+    viewer has. Only your first step's icon and your backdrop are in that
+    count; the rest of the pack is fetched after the curtain lifts.
+  - A pack that leaves the key out gets the viewer's own quiet default
+    (`AGENT.md` §7).
+  - **Order `icons:` so the flow's first step is first.** It is now the only
+    icon fetched before the curtain can lift, so getting it wrong costs a
+    round trip that used to be hidden by preloading everything at once.
 - `glyphs` — optional per-icon 2D mark: always a path inside the pack (never a
   colour), resolved relative to `component.js` and forwarded to the icon as
   `api.glyph`. A sequence shows it in a slot once that icon has been collected
@@ -248,8 +263,15 @@ If the pack has a sequence, the icon starts at its t=0 pose (faded out, 48 %
 scale in the example) and a hidden pane never advances it — scrub instead:
 `window.viewer.sequence.seek(3.0)` shows the held final frame (`AGENT.md`
 §12.11 has the full checklist). If the sequence is a flow, `await
-viewer.sequence.ready` first (it preloads every icon and captures its glyph),
-then drive it with `viewer.sequence.advance()` / `.restart()`.
+viewer.sequence.ready` first (it preloads every icon and captures its glyph —
+and it does not *start* until the first draw is painted, so awaiting it is now
+the only reliable way to know the whole pack is in), then drive it with
+`viewer.sequence.advance()` / `.restart()`.
+
+If a load ever seems to hang, do not guess at it: `viewer.load.log` names every
+phase with its wall time, `viewer.load.failed` names the resource that did not
+arrive, and `viewer.curtain.message` is the exact text a visitor is looking at.
+`?dev=1` prints the same phase log to the console as it happens.
 
 Only one pack is resident at a time — loading a new zip or unloading clears the
 whole `zipfs` cache.

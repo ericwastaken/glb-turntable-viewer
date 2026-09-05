@@ -95,14 +95,17 @@
      `loading:` in icons.yml (AGENT.md §7). */
   #curtain {
     position: absolute; inset: 0; z-index: 8;
-    display: flex; align-items: center; justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3vmin;
     background: #08080a;
   }
   /* An author rule, so it beats the UA's [hidden] on a flex element. */
   #curtain[hidden] { display: none !important; }
   /* The quiet default: a soft pulsing disc. Deliberately dumb — no spinner
-     library and no fake progress bar, because there is no progress to report,
-     only a wait. A pack's `loading.image` becomes this element's background. */
+     library and no fake percentage, because a percentage is a number we cannot
+     compute: we know how many resources the first draw needs, not how many
+     bytes each one is. A pack's `loading.image` becomes this element's
+     background. */
   #curtainMark {
     width: 14vmin; height: 14vmin; max-width: 96px; max-height: 96px;
     border-radius: 50%;
@@ -115,6 +118,37 @@
     50%      { opacity: .95; transform: scale(1); }
   }
   #curtain[data-anim="none"] #curtainMark { animation: none; opacity: .8; }
+
+  /* --- what the curtain SAYS ---------------------------------------------------
+     The curtain used to have only a success path, so a slow load and a hung one
+     looked identical: dark ground, quiet pulse, for ever. This is the rest of
+     it — a progress count while things arrive, a note once a resource is slow,
+     and a named failure with a retry when one never arrives at all.
+     It lives INSIDE #curtain, so it is readable in bare mode (?ui=0) — which is
+     the mode a pack is actually looked at in, on a phone — without the status
+     line, which bare mode hides. */
+  #curtainSay {
+    max-width: min(80vw, 46ch); text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 2.2vmin;
+    color: #cfd6ea; font: 500 clamp(12px, 2.1vmin, 15px)/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  /* pre-line, so a failure's second sentence (what went wrong) sits on its own
+     line without any markup in the message itself. */
+  #curtainMsg { margin: 0; opacity: .82; overflow-wrap: anywhere; white-space: pre-line; }
+  #curtain[data-state="failed"] #curtainMsg { color: #ffb4a8; opacity: 1; }
+  /* A stopped pulse is itself part of the failure state: a mark still breathing
+     under a failure message reads as "still trying". */
+  #curtain[data-state="failed"] #curtainMark { animation: none; opacity: .28; }
+  #curtainRetry {
+    font: inherit; font-weight: 700; letter-spacing: .04em;
+    color: #0b1020; background: #cfd6ea; border: 0; border-radius: 999px;
+    padding: 1.1vmin 4vmin; min-height: 44px; min-width: 44px;   /* a real tap target */
+    cursor: pointer;
+  }
+  #curtainRetry:hover { background: #eef2ff; }
+  /* The rotate prompt has NO TEXT, by decision (below), so the message column
+     is not shown for it either. */
+  #curtain[data-reason="orientation"] #curtainSay { display: none; }
   /* The rotate prompt: NO TEXT, by decision — a glyph reads in every language,
      and there is nothing to say that the picture does not. Inline SVG/CSS, no
      asset to ship. Shown only for the orientation reason. */
@@ -288,6 +322,12 @@ body.devmode::after {
         <line x1="29" y1="46" x2="35" y2="46" stroke="#cfd6ea" stroke-width="2.5" stroke-linecap="round"/>
       </g>
     </svg>
+    <!-- What the curtain says. Empty until there is something honest to say —
+         a progress count, a slow note, or a named failure with a retry. -->
+    <div id="curtainSay" hidden>
+      <p id="curtainMsg" role="status" aria-live="polite"></p>
+      <button id="curtainRetry" type="button" hidden>Retry</button>
+    </div>
   </div>
 </div>
 
@@ -410,8 +450,14 @@ const DEV = devFlags.size > 0 && ![...devFlags].every(f => /^(0|off|false|no)$/.
 const DEV_ALL = DEV && devFlags.has('all');
 const DEV_MOBILE = DEV && devFlags.has('mobile');
 // A token, not `cache: 'reload'`: a dynamic import() takes no cache option, and
-// a module is only re-evaluated when its URL itself differs.
-const devBust = () => (DEV ? `?dev=${Date.now()}` : '');
+// a module is only re-evaluated when its URL itself differs. `?dev=all` extends
+// it to the PACK — its loader and every icon module — which §4 has always
+// promised and, until this was parameterised, nothing actually did.
+const devBust = (on = DEV) => (on ? `?dev=${Date.now()}` : '');
+// One id for a whole page load, so a pack's loader and its icon modules are
+// busted together rather than each getting a different URL. packToken() below
+// turns it into the query a pack's modules actually carry.
+const DEV_PACK_ID = DEV_ALL ? Date.now().toString(36) : '';
 if (DEV) {
   document.body.classList.add('devmode');
   console.info(`[viewer] dev mode${DEV_ALL ? ' (all)' : ''}${DEV_MOBILE ? ' (mobile stage)' : ''}: sequence runtime uncached, saved step ignored${DEV_ALL ? ', pack modules uncached' : ''}. index.html and vendor/ still come from the browser cache — use the viewer-dev server for those.`);
@@ -552,6 +598,7 @@ applyBackground();
 // most urgent one, because they genuinely overlap: a phone held the wrong way
 // while a pack is still loading needs the rotate prompt, not a pulse.
 const curtainEl = $('curtain'), curtainMark = $('curtainMark');
+const curtainSay = $('curtainSay'), curtainMsg = $('curtainMsg'), curtainRetry = $('curtainRetry');
 const curtainWhy = new Set(['loading']);
 const CURTAIN_ORDER = ['orientation', 'loading'];
 function curtainSync() {
@@ -559,14 +606,33 @@ function curtainSync() {
   if (why) curtainEl.dataset.reason = why;
   curtainEl.hidden = !why;
 }
+let curtainRetryFn = null;
+curtainRetry.onclick = () => {
+  const f = curtainRetryFn;
+  curtainRetryFn = null;
+  // Every press moves the URL token on, or the retried import re-attaches to
+  // the module map's record of the one that stalled — see packToken().
+  if (f) { loadMon.again(); f(); }
+};
 const curtain = {
   raise(why) { curtainWhy.add(why); curtainSync(); },
-  clear(why) { curtainWhy.delete(why); curtainSync(); },
+  // A NAMED load failure keeps the curtain up. Every failure path in the page
+  // lowers it so a visitor is not left staring at an opaque layer — but an
+  // opaque layer that says which resource never arrived, and offers a retry, is
+  // more use than a blank page with nothing on it to act on.
+  clear(why) {
+    if (why === 'loading' && curtainEl.dataset.state === 'failed') return;
+    curtainWhy.delete(why); curtainSync();
+    if (why === 'loading') this.say(null, null);
+  },
   get up() { return !curtainEl.hidden; },
   get reason() { return curtainEl.hidden ? null : curtainEl.dataset.reason; },
-  // A pack's `loading:` block from icons.yml (AGENT.md §7). Deliberately three
-  // knobs — a ground colour, an image and whether it moves. No spinner, no
-  // progress bar: there is no progress to report, only a wait.
+  get state() { return curtainEl.dataset.state || null; },
+  get message() { return curtainSay.hidden ? null : curtainMsg.textContent; },
+  // A pack's `loading:` block from icons.yml (AGENT.md §7). Four knobs — a
+  // ground colour, an image, whether it moves, and (through loadMon) how long
+  // before a slow load is called slow. Still no percentage: the count of
+  // resources is honest, a percentage of bytes we never asked for is not.
   appearance(decl) {
     curtainEl.style.background = decl?.ground ? String(decl.ground) : '';
     curtainMark.style.backgroundImage = decl?.image ? `url("${decl.image}")` : '';
@@ -574,7 +640,247 @@ const curtain = {
     curtainMark.style.boxShadow = decl?.image ? 'none' : '';
     curtainEl.dataset.anim = decl?.animation === 'none' ? 'none' : 'pulse';
   },
+  // The only way text reaches the curtain. `state` is loading | slow | failed;
+  // a null text clears the column back to the quiet pulse.
+  say(state, text, retry) {
+    curtainRetryFn = retry ?? null;
+    curtainRetry.hidden = !retry;
+    if (!text) {
+      curtainSay.hidden = true; curtainMsg.textContent = '';
+      delete curtainEl.dataset.state;
+      return;
+    }
+    curtainEl.dataset.state = state || 'loading';
+    curtainMsg.textContent = text;
+    curtainSay.hidden = false;
+  },
 };
+
+// --- the load monitor --------------------------------------------------------
+// Every network read in the load path is registered here, and this is what
+// decides whether the curtain is quiet, is saying "still going", or has given
+// up and named the thing that never arrived.
+//
+// It exists because NOTHING in the load path had a deadline. A relayed link
+// that accepts a connection and then never answers left `fetch()` and
+// `import()` promises that simply never settled: nothing failed, so nothing was
+// reported, so the curtain stayed up for ever with no message at all.
+//
+// Two thresholds rather than one, because SLOW and FAILED are different things
+// to say to a visitor: the first admits we are still waiting and names what on,
+// the second stops waiting and offers a retry. Both are declarable per pack in
+// icons.yml's `loading:` block (AGENT.md §7).
+const LOAD_DEFAULTS = { slowAfter: 15, failAfter: 45 };   // seconds
+const loadMon = (() => {
+  let limits = { ...LOAD_DEFAULTS };
+  let expected = 0, done = 0;
+  const live = new Map();          // label -> { t0, timer }
+  let slowLabel = null, failure = null, retry = null;
+  const log = [];                  // dev-mode phase timings
+  // True until the first draw is complete. After that the pack is still
+  // fetching — the deferred preload — but the visitor is looking at a working
+  // page, so those reads are still timed and still deadlined and are simply not
+  // narrated. A slow third icon must not put a warning over a live step 1.
+  let foreground = true;
+  // How many times the CURRENT load has been retried — 0 for a first attempt,
+  // which is the common case and must leave every URL alone. It is a URL token,
+  // not a statistic: see packToken().
+  let retries = 0;
+  // The status line can also be held by something that is not a load failure —
+  // a sequence that would not compile, say — so the monitor only ever releases
+  // a hold it put there itself.
+  let mine = false;
+  const hold = text => { mine = true; holdStatus(text); };
+  const unhold = () => { if (mine) { mine = false; releaseStatus(); } };
+
+  const plural = () => (expected ? ` ${Math.min(done + 1, expected)} of ${expected}` : '');
+
+  function paint() {
+    if (!foreground) return;
+    if (failure) {
+      const text = `Could not load ${failure.label}.\n${failure.detail}`;
+      // Raised, not merely restyled: a failure has to be visible even when the
+      // curtain had already come down (a later icon picked from the dropdown),
+      // and in bare mode there is no status line to fall back on.
+      curtain.raise('loading');
+      curtain.say('failed', text, retry ? () => retry() : null);
+      hold(`Could not load ${failure.label} — ${failure.detail}`);
+      return;
+    }
+    if (slowLabel) {
+      const text = `Still loading${plural()} — waiting on ${slowLabel}. This connection is slow.`;
+      curtain.say('slow', text);
+      hold(text);
+      return;
+    }
+    const label = live.keys().next().value;
+    curtain.say('loading', label ? `Loading${plural()} — ${label}` : null);
+  }
+
+  // A phase's timing line. Off outside ?dev= — this is an author's tool, and a
+  // visitor's console is not the place to publish a load profile.
+  function note(label, ms, how) {
+    log.push({ label, ms: +ms.toFixed(1), how });
+    if (DEV) console.info(`[load] ${how.padEnd(6)} ${ms.toFixed(1).padStart(8)} ms  ${label}`);
+  }
+
+  return {
+    limits: () => limits,
+    get log() { return log.slice(); },
+    // The pack's own thresholds, applied the moment its manifest is parsed —
+    // so everything after the manifest (the sequence, the icon modules, the
+    // background) is judged by the pack's numbers, and only the manifest fetch
+    // itself is judged by the viewer's. There is no way round that ordering:
+    // the file that declares them is the file we are waiting for.
+    declare(d) {
+      if (Number.isFinite(d?.slowAfter)) limits.slowAfter = d.slowAfter;
+      if (Number.isFinite(d?.failAfter)) limits.failAfter = d.failAfter;
+      if (DEV) console.info(`[load] limits: slowAfter ${limits.slowAfter}s, failAfter ${limits.failAfter}s`);
+    },
+    // "n more resources are needed before the first draw." Called by whoever
+    // knows — the pack loader for the pack's files, the viewer for the
+    // background — so the count is assembled honestly rather than guessed.
+    expect(n) { expected += Math.max(0, n | 0); paint(); },
+    get retries() { return retries; },
+    // Another go at something that already failed — the Retry button, or a
+    // later icon being asked for a second time. It only has to move the URL
+    // token on (see packToken), so the import is not handed the module map's
+    // record of the stalled one.
+    again() { retries++; },
+    // A fresh load. `next` is what the Retry button re-runs. This does NOT
+    // touch the retry count: a new load of a different thing starts at zero, so
+    // ordinary URLs stay ordinary and stay cacheable.
+    reset(next) {
+      for (const r of live.values()) clearTimeout(r.timer);
+      live.clear(); log.length = 0;
+      expected = 0; done = 0; slowLabel = null; failure = null;
+      retry = next ?? null;
+      foreground = true;
+      limits = { ...LOAD_DEFAULTS };
+      unhold();
+      paint();
+    },
+    // Register one resource. The returned token MUST be settled.
+    begin(label, counted = true) {
+      const t0 = performance.now();
+      const rec = { t0, timer: setTimeout(() => { slowLabel = label; paint(); }, limits.slowAfter * 1000) };
+      live.set(label, rec);
+      paint();
+      const settle = () => {
+        clearTimeout(rec.timer);
+        live.delete(label);
+        if (slowLabel === label) slowLabel = live.keys().next().value ?? null;
+      };
+      return {
+        ok() { settle(); if (counted) done++; note(label, performance.now() - t0, 'ok'); paint(); },
+        fail(detail) {
+          settle();
+          note(label, performance.now() - t0, 'FAIL');
+          failure = { label, detail: detail || 'it did not arrive' };
+          paint();
+        },
+      };
+    },
+    // Everything the first draw needed is here: stop talking.
+    settle() {
+      for (const r of live.values()) clearTimeout(r.timer);
+      live.clear(); slowLabel = null;
+      foreground = false;
+      // A load that came good takes the retry token back off: the URLs that
+      // follow (the deferred preload) are ordinary again, and stay cacheable.
+      if (!failure) { retries = 0; unhold(); curtain.say(null, null); }
+      if (DEV && log.length) console.info(`[load] first draw complete — ${log.length} phase(s), ${log.reduce((a, e) => a + e.ms, 0).toFixed(1)} ms of tracked waiting`);
+    },
+    get failed() { return failure ? { ...failure } : null; },
+  };
+})();
+
+// A message refreshStatus() must not erase. A load failure used to be written
+// straight to #status and then quietly overwritten by the next refreshStatus()
+// a few lines later — the exact bug that left a sequence error named only in
+// the console while AGENT.md §9 promised the status line would carry it.
+let statusHold = null;
+function holdStatus(text) { statusHold = text; status.textContent = text; }
+function releaseStatus() { if (statusHold !== null) { statusHold = null; refreshStatus(); } }
+
+// --- retry tokens ------------------------------------------------------------
+// A dynamic import() is keyed BY URL in the browser's module map, and a stalled
+// one leaves a PENDING record there for ever. Retrying the same URL therefore
+// re-attaches to the same dead promise and never issues a second request —
+// measured: one request in the server log for two attempts, the second failing
+// at the same deadline while the server was already answering. So every retry
+// carries a token that makes the URL different.
+//
+// `?dev=all` (§4) wants the same thing for a different reason, and shares it.
+function packToken() {
+  const q = [];
+  if (DEV_PACK_ID) q.push(`dev=${DEV_PACK_ID}`);
+  if (loadMon.retries) q.push(`retry=${loadMon.retries}`);
+  return q.length ? `?${q.join('&')}` : '';
+}
+// The same, for the modules the VIEWER itself imports mid-load.
+const retryQ = () => (loadMon.retries ? `?retry=${loadMon.retries}` : '');
+
+// --- deadlines on the viewer's own reads -------------------------------------
+// The pack loader carries its own copy of these (components/pack.component.js);
+// it is a standalone file every pack copies in and cannot import from here.
+// These three are for the reads the VIEWER makes: the component module, the
+// sequence runtime, and a component's background image.
+
+// A dynamic import() CANNOT be aborted, so its deadline is a race: the module
+// may still turn up later, but the load stops waiting on it and says which one
+// it was. That is the whole difference between a reported failure and a hang.
+function withDeadline(promise, label, counted = true) {
+  const t = loadMon.begin(label, counted);
+  const secs = loadMon.limits().failAfter;
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no response within ${secs}s`)), secs * 1000); }),
+  ]).then(
+    v => { clearTimeout(timer); t.ok(); return v; },
+    e => { clearTimeout(timer); t.fail(e.message ?? String(e)); throw e; },
+  );
+}
+
+// A background is a CSS background-image, so nothing in the page ever waited
+// for it: the curtain came up on a lit icon over a bare ground and the backdrop
+// faded in seconds later. Decoding it here makes the FIRST DRAW COMPLETE, and
+// puts the backdrop on the same deadline as everything else.
+function awaitImage(url, label) {
+  const img = new Image();
+  // `load`, not `decode()`: decode() is allowed to sit on a page that is not
+  // being painted, and an automation pane or a backgrounded tab is exactly
+  // that (§10.1). `load` fires as soon as the bytes are in and the image is
+  // usable, which is the thing the curtain is actually waiting for.
+  const arrived = new Promise((res, rej) => {
+    img.onload = () => res();
+    img.onerror = () => rej(new Error('the image could not be loaded'));
+  });
+  img.src = url;
+  return withDeadline(arrived, label);
+}
+
+// --- the first draw ----------------------------------------------------------
+// The line between "what step 1 needs" and "everything else". Anything the
+// visitor cannot see yet waits on this promise, so the bytes the curtain is
+// actually waiting for do not have to share the link with the rest of the pack.
+let firstDrawDone = null;
+let firstDraw = Promise.resolve();
+function resetFirstDraw() { firstDraw = new Promise(r => { firstDrawDone = r; }); }
+function markFirstDraw() {
+  const done = firstDrawDone;
+  if (!done) return;
+  firstDrawDone = null;
+  let fired = false;
+  const go = () => { if (!fired) { fired = true; done(); } };
+  // Two frames, so the curtain is not merely lowered but actually painted over.
+  requestAnimationFrame(() => requestAnimationFrame(go));
+  // …and a timer behind it, because rAF is PAUSED in a hidden or headless pane
+  // (§10.1). A check that never preloaded would be a worse bug than one that
+  // preloads a quarter of a second early.
+  setTimeout(go, 250);
+}
 
 // --- input policy (a sequence's `input:` block — AGENT.md §12.13) ------------
 // zoom / drag / swipe are DECLARED rather than accumulated. Before this they
@@ -1046,6 +1352,21 @@ async function applyComponentApi(api, name) {
   }
   componentBg = api.background ?? null;   // { image?, color? } — a component may bring its backdrop
   applyBackground();
+  // The backdrop is PART of the first draw, not something that fades in behind
+  // a lifted curtain. Nothing used to wait for it — it is a CSS
+  // background-image — so on a slow link the curtain came up on a lit icon over
+  // a bare ground and the picture completed seconds later. Measured on a
+  // 250 KB/s link with a 687 KB backdrop: the curtain lifted at 5.3 s and the
+  // background finished at 10.1 s, because it was sharing the link with 4.5 MB
+  // of icons for steps nobody had reached.
+  let bgWait = null;
+  if (componentBg?.image) {
+    // Normally already in flight from enterPack(); started here for a component
+    // that is not a pack, or for an icon whose `backgrounds:` override differs.
+    if (bgPreload?.url === componentBg.image) bgWait = bgPreload.promise;
+    else { loadMon.expect(1); bgWait = awaitImage(componentBg.image, 'the pack background'); }
+  }
+  bgPreload = null;
   if (api.pointer) attachPointer(api.pointer);
   $('compName').textContent = name;
   $('compChip').style.display = 'inline-block';
@@ -1053,13 +1374,18 @@ async function applyComponentApi(api, name) {
   if (api.sequence && component.kind === 'object') {
     await startSequence(component);
     // The curtain comes down as soon as STEP 1 CAN DRAW — its t=0 pose applied
-    // — and NOT when the whole pack has finished loading. Preloading the
-    // remaining icons and capturing their glyphs carries on behind the lifted
-    // curtain (`seq.ready`), which is the difference between a first frame in
-    // a few hundred milliseconds and one in several seconds.
+    // — and NOT when the whole pack has finished loading. The remaining icons
+    // and their glyph captures are acquired AFTER this, gated on `firstDraw`
+    // (`seq.ready`), which is the difference between a first frame in a few
+    // hundred milliseconds and one in several seconds.
     try { await component?.seq?.posed; } catch (e) { console.warn('sequence pose:', e); }
   }
+  // Errors here are already named and shown by the monitor; swallowing the
+  // rejection only stops it becoming an unhandled one.
+  if (bgWait) { try { await bgWait; } catch (e) { console.warn('background:', e); } }
+  loadMon.settle();
   curtain.clear('loading');
+  markFirstDraw();
   return true;
 }
 
@@ -1390,6 +1716,32 @@ function makeSequenceHost(comp) {
     },
     setActive, setFrozen, rest, planMove, anchor, hitTest, glyphFor, beginFrame,
     attachDrag: attachIconDrag, detachDrag: detachIconDrag,
+    // The rest of the pack is fetched only once step 1 is actually on screen.
+    // Before this the preload began the moment the sequence compiled, so
+    // several megabytes of icons for steps nobody had reached raced the one
+    // icon and the backdrop the curtain was waiting for (AGENT.md §7).
+    deferPreload: firstDraw,
+    // A tap that outran that deferral. The flow WAITS — curtain back up, the
+    // icon named — rather than throwing or, worse, doing nothing at all. Named
+    // `waitingFor` and not `hold` because `seq.hold()` is the rotation lock and
+    // these are different things. The returned function releases the wait, or
+    // takes a message and turns it into the same named failure any other
+    // resource gets.
+    waitingFor(name, again) {
+      curtain.raise('loading');
+      curtain.say('loading', `Loading ${name}…`);
+      holdStatus(`Loading ${name}…`);
+      return detail => {
+        if (detail) {
+          curtain.say('failed', `Could not load ${name}.\n${detail}`, again ?? null);
+          holdStatus(`Could not load ${name} — ${detail}`);
+          return;
+        }
+        curtain.say(null, null);
+        curtain.clear('loading');
+        releaseStatus();
+      };
+    },
     // The one size/orientation source (see `stage` above). The runtime reads it
     // for the drag-to-turn distance, the swipe threshold and its portrait
     // overrides, so ?dev=mobile changes all three through the same accessor a
@@ -1425,9 +1777,12 @@ function makeSequenceHost(comp) {
 async function startSequence(comp) {
   const api = comp.api, root0 = comp.root;
   root0.visible = false;   // no flash of the rest pose while the module loads
+  // Arm the gate BEFORE the host is built: the host hands the runtime this very
+  // promise, and the deferred preload waits on it.
+  resetFirstDraw();
   let seq = null, failure = null;
   try {
-    const { createSequence } = await import('./sequence.js' + devBust());
+    const { createSequence } = await withDeadline(import('./sequence.js' + (devBust() || retryQ())), 'the sequence runtime', false);
     seq = createSequence(api.sequence.doc, { ...makeSequenceHost(comp), dev: DEV });
   } catch (err) {
     // Kept, not written straight to the status line: refreshStatus() below
@@ -1451,8 +1806,11 @@ async function startSequence(comp) {
   if (orientationHold) seq?.hold?.(true);
   syncSequenceUI();
   // A live sequence changes what a drag does (§12.12, §12.13). A FAILED one
-  // has only one thing worth saying, so it keeps the line.
-  if (failure) status.textContent = failure; else refreshStatus();
+  // has only one thing worth saying, so it KEEPS the line — holdStatus() is
+  // what makes that true now, rather than the write-ordering trick it used to
+  // be. Verify it by reading #status a second after load, not at the moment of
+  // the write: the write always looked right, and was erased afterwards.
+  if (failure) holdStatus(failure); else refreshStatus();
 }
 
 function stopSequence() {
@@ -1489,17 +1847,26 @@ async function activateComponent(mod, name, assetPath) {
   unloadComponent();
   let api;
   try {
-    api = await mod.createComponent({ THREE, renderer, scene, camera, assetPath });
+    // `load` and `dev` are optional extras a component may ignore. The stock
+    // pack loader uses `load` to put a deadline on every read it makes and to
+    // report each one, so a stalled icon module has somewhere to be reported.
+    api = await mod.createComponent({
+      THREE, renderer, scene, camera, assetPath,
+      load: loadMon,
+      // A FUNCTION, not a string: the token moves on with every retry, and an
+      // icon module imported later must carry the token current at that moment.
+      dev: { on: DEV, all: DEV_ALL, bust: packToken },
+    });
   } catch (err) {
-    status.textContent = `Component ${name} failed to start: ${err.message}`;
     console.error(err);
+    if (!loadMon.failed) status.textContent = `Component ${name} failed to start: ${err.message}`;
     curtain.clear('loading');   // a failure must not leave an opaque page
     return;
   }
   // Icon pack: { icons: { name: async () => api } } — dropdown swaps to the
   // pack's contents plus an "unload" entry.
   if (api?.icons && typeof api.icons === 'object' && !Array.isArray(api.icons)) {
-    await enterPack(name, api.icons, api.loading);
+    await enterPack(name, api.icons, api.loading, api.background);
     return;
   }
   await applyComponentApi(api, name);
@@ -1547,13 +1914,25 @@ function enterPackMode() {
   document.body.classList.add('zipmode');
 }
 
-async function enterPack(label, icons, loading) {
+// Started here, awaited in applyComponentApi(): the backdrop is part of the
+// first draw, and this is the earliest moment its URL is known — so it travels
+// WITH the first icon instead of queueing behind it.
+let bgPreload = null;
+
+async function enterPack(label, icons, loading, background) {
   const names = Object.keys(icons);
   if (!names.length) { status.textContent = `${label}: the pack lists no icons.`; curtain.clear('loading'); return; }
   // The pack's own `loading:` (icons.yml, §7) restyles the curtain that is
   // ALREADY up. This runs right after the manifest parse and before a single
   // icon is built, which is the earliest moment the pack's wishes are known.
   if (loading) curtain.appearance(loading);
+  bgPreload = null;
+  if (background?.image) {
+    loadMon.expect(1);
+    const p = awaitImage(background.image, 'the pack background');
+    p.catch(() => {});   // applyComponentApi owns the failure; this only stops it being unhandled
+    bgPreload = { url: background.image, promise: p };
+  }
   // No zipState yet means this pack came from ?component=, with no zip involved.
   zipState = zipState ?? { source: 'pack', label, savedHTML: null, savedValue: null, icons: null };
   zipState.icons = icons;
@@ -1564,12 +1943,17 @@ async function enterPack(label, icons, loading) {
 
 async function activatePackIcon(name, picked = false) {
   unloadComponent(false, true);   // keep the backdrop while switching icons (no flash)
+  // A human picking an icon from the dropdown is a NEW load attempt, with its
+  // own deadlines and its own Retry. The pack's FIRST icon is not: it is the
+  // tail of the attempt that started in loadComponentURL() / loadZipFile(),
+  // and resetting here would throw away that attempt's resource count.
+  if (picked) loadMon.reset(() => activatePackIcon(name, true));
   status.textContent = `Loading ${name}…`;
   let api;
   try { api = await zipState.icons[name](); }
   catch (err) {
-    status.textContent = `Icon ${name} failed: ${err.message}`;
     console.error(err);
+    if (!loadMon.failed) status.textContent = `Icon ${name} failed: ${err.message}`;
     curtain.clear('loading');
     return;
   }
@@ -1657,6 +2041,12 @@ async function loadZipFile(f) {
     cache.put(base + p, new Response(data, { headers: { 'Content-Type': mimeFor(p) } }))));
 
   status.textContent = `Loading ${f.name}…`;
+  // A dropped zip is a load attempt too. Its files are already in the zipfs
+  // cache, so nothing here can stall on the network — but the icon modules the
+  // loader imports out of that cache still go through the same reporting, and
+  // a retry has to mean "load this zip again", not "reload the page".
+  loadMon.reset(() => loadZipFile(f));
+  curtain.raise('loading');
   try {
     const mod = await import(base + entry);
     zipState = { source: 'zip', label: f.name, savedHTML: null, savedValue: null, icons: null };
@@ -1664,8 +2054,9 @@ async function loadZipFile(f) {
     await activateComponent(mod, f.name, base);
     if (!zipState.icons) swapDropdown(f.name, []);   // non-pack zip: still offer the unload entry
   } catch (err) {
-    status.textContent = `Could not load ${f.name}: ${err.message}`;
     console.error(err);
+    if (!loadMon.failed) status.textContent = `Could not load ${f.name}: ${err.message}`;
+    curtain.clear('loading');
     unloadZip(false);
   }
 }
@@ -1702,13 +2093,20 @@ async function loadComponentURL(path) {
     curtain.clear('loading');
     return;
   }
+  // A load ATTEMPT starts here: the monitor's counters, its deadlines and the
+  // Retry affordance all belong to this attempt, and Retry re-runs exactly it.
+  loadMon.reset(() => loadComponentURL(path));
+  loadMon.expect(1);   // the module itself; the pack loader adds its own files
+  const name = url.pathname.split('/').pop();
   status.textContent = `Loading component ${path}…`;
   try {
-    const mod = await import(url.href);
-    await activateComponent(mod, url.pathname.split('/').pop(), url.href.slice(0, url.href.lastIndexOf('/') + 1));
+    const mod = await withDeadline(import(url.href + packToken()), name);
+    await activateComponent(mod, name, url.href.slice(0, url.href.lastIndexOf('/') + 1));
   } catch (err) {
-    status.textContent = `Could not load component ${path}: ${err.message}`;
     console.error(err);
+    // loadMon has already named the resource and offered Retry; only say
+    // something ourselves when the failure was not one of its deadlines.
+    if (!loadMon.failed) status.textContent = `Could not load component ${path}: ${err.message}`;
     curtain.clear('loading');
   }
 }
@@ -1728,6 +2126,10 @@ $('compChip').onclick = () => { if (zipState) unloadZip(true); else unloadCompon
 
 // --- model loading -----------------------------------------------------------
 function refreshStatus() {
+  // A held message (a load failure, a slow link) outranks the running
+  // description of the scene. Without this the description simply overwrote it
+  // — see holdStatus() above.
+  if (statusHold !== null) { status.textContent = statusHold; return; }
   const sc = overrideMats.size
     ? ($('ovToggle').checked ? ` • sidecar ${sidecarName} ON` : ` • sidecar ${sidecarName} off (as exported)`)
     : (sidecarSpec ? ` • sidecar ${sidecarName} matches no meshes` : '');
@@ -1780,15 +2182,28 @@ function setModel(gltf, label) {
   }
 }
 
+// GLTFLoader has no abort of its own, so its deadline is a TIMER beside it:
+// past failAfter the page stops waiting and names the model, which is the whole
+// difference between a reported failure and the curtain staying up for ever.
+// (Unlike a pack's assets, a model reports real byte progress, so the status
+// line keeps its percentage — that one is a number we actually have.)
 function loadURL(url, label) {
+  loadMon.reset(() => loadURL(url, label));
+  loadMon.expect(1);
+  const t = loadMon.begin(label);
+  const secs = loadMon.limits().failAfter;
+  let settled = false;
+  const give = fn => { if (settled) return false; settled = true; clearTimeout(timer); fn(); return true; };
+  const timer = setTimeout(() => give(() => t.fail(`no response within ${secs}s`)), secs * 1000);
   status.textContent = `Loading ${label}…`;
-  loader.load(url, g => setModel(g, label),
-    xhr => { if (xhr.total) status.textContent = `Loading ${label}… ${Math.round(xhr.loaded / xhr.total * 100)}%`; },
-    err => {
-      status.textContent = `Failed to load ${label}: ${err.message ?? err}`;
+  loader.load(url,
+    g => give(() => { t.ok(); loadMon.settle(); setModel(g, label); }),
+    xhr => { if (xhr.total && statusHold === null) status.textContent = `Loading ${label}… ${Math.round(xhr.loaded / xhr.total * 100)}%`; },
+    err => give(() => {
+      t.fail(err.message ?? String(err));
       console.error(err);
       curtain.clear('loading');   // show the failure, not an opaque page
-    });
+    }));
 }
 
 // --- UI ----------------------------------------------------------------------
@@ -1950,7 +2365,12 @@ window.viewer = { THREE, scene, camera, renderer, pivot, controls,
   // the curtain, and the rotation lock — all readable so a check can assert the
   // thing the code uses rather than the thing the window happens to be.
   stage,
-  get curtain() { return { up: curtain.up, reason: curtain.reason }; },
+  get curtain() { return { up: curtain.up, reason: curtain.reason, state: curtain.state, message: curtain.message }; },
+  // The load monitor: what (if anything) failed, the thresholds in force, and
+  // the per-phase timings ?dev= prints. A check can assert the state the page
+  // is actually in rather than the pixels it happens to be showing.
+  get load() { return { failed: loadMon.failed, limits: loadMon.limits(), log: loadMon.log }; },
+  retry() { curtainRetry.click(); },
   get orientation() {
     return { stage: stage.orientation, want: wantedOrientation(), held: orientationHold };
   },

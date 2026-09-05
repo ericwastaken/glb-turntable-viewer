@@ -30,15 +30,27 @@ background: backgrounds/dusk.jpg
 # pack behaves exactly as it always has.
 sequence: sequence.yml
 
-# Optional appearance for the LOADING CURTAIN — the opaque layer that is up
-# before the first paint and comes down the moment step 1 can draw (AGENT.md
-# §7). Three knobs, on purpose:
+# The LOADING CURTAIN — the opaque layer that is up before the first paint and
+# comes down the moment step 1 can draw, backdrop and all (AGENT.md §7).
+#
+# Three knobs for how it LOOKS:
 #   ground     a CSS colour for the layer itself
 #   image      an image inside the pack, centred (optional)
 #   animation  pulse (default) | none
-# There is no spinner and no progress bar: there is no progress to report, only
-# a wait, and the rest of the pack keeps loading behind the lifted curtain.
+# There is no spinner and no percentage: the curtain reports a COUNT of the
+# resources it is waiting for ("Loading 3 of 6 — …"), because that is a number
+# the viewer actually has. Bytes-remaining is not.
+#
+# …and two for how PATIENT it is, in seconds:
+#   slowAfter  say so, and name what it is waiting on          (default 15)
+#   failAfter  give up on that resource, name it, offer Retry  (default 45)
+# Every network read in the load path is on these. Nothing used to be, which is
+# how a link that accepted a connection and then never answered could leave this
+# curtain up for ever with nothing on it at all.
+#
 # A pack that declares nothing still gets a deliberate-looking default.
 loading:
   ground: "#0b0d16"        # near-black, a shade off this pack's dusk backdrop
   animation: pulse
+  slowAfter: 15            # the viewer's own defaults, written out
+  failAfter: 45

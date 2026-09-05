@@ -431,6 +431,10 @@ function dropSaved(key) {
 //          acquire(name) -> Promise<handle>, setActive(handle|null),
 //          setFrozen(handle, bool), rest(handle),
 //          planMove(handle, el, fit) -> { from, to }, glyphFor(handle),
+//          deferPreload: Promise (optional) - resolved once step 1 is drawn;
+//            the rest of the pack is not fetched until it settles,
+//          waitingFor(name, retry) -> release(detail?) (optional) - the
+//            viewer's curtain, for a tap that outran that deferral,
 //          dispose() }
 // Returns null when this sequence does not apply to the icon; otherwise the
 // runtime described in AGENT.md §12.
@@ -1152,11 +1156,22 @@ export function createSequence(doc, host) {
   }
 
   // ---- verbs ---------------------------------------------------------------------------
-  async function acquire(name) {
-    if (handles.has(name)) return handles.get(name);
-    const h = await host.acquire(name);
-    handles.set(name, h);
-    return h;
+  // In-flight builds are SHARED. A tap that outruns the deferred preload asks
+  // for the very icon the preload is already fetching, and without this both
+  // callers start their own build — two imports, two geometry builds, the same
+  // megabytes twice, on the link that was already the problem.
+  const acquiring = new Map();
+  function acquire(name) {
+    if (handles.has(name)) return Promise.resolve(handles.get(name));
+    let p = acquiring.get(name);
+    if (!p) {
+      p = host.acquire(name).then(
+        h => { acquiring.delete(name); handles.set(name, h); return h; },
+        e => { acquiring.delete(name); throw e; },
+      );
+      acquiring.set(name, p);
+    }
+    return p;
   }
 
   function advance() {
@@ -1165,8 +1180,15 @@ export function createSequence(doc, host) {
     const to = from + 1 < steps.length ? from + 1 : null;
     if (to === null) return;                       // the last step is the end state
     const need = steps[to].icon;
-    if (need && !handles.has(need)) {              // preload has not reached it yet
-      acquire(need).then(() => { if (!disposed && flow.index === from) advance(); }).catch(err => console.error(err));
+    if (need && !handles.has(need)) {              // the deferred preload has not reached it yet
+      // HOLD, do not throw and do not silently do nothing: the viewer puts its
+      // curtain back up naming the icon, and the step advances the moment the
+      // icon arrives. A tap must never stall without saying so — that is the
+      // guarantee the deferred preload (§7) is allowed to lean on.
+      const release = host.waitingFor?.(need, () => { release?.(); advance(); });
+      acquire(need)
+        .then(() => { release?.(); if (!disposed && flow.index === from) advance(); })
+        .catch(err => { release?.(err.message ?? String(err)); console.error(err); });
       return;
     }
     flow.index = to;
@@ -1389,11 +1411,17 @@ export function createSequence(doc, host) {
   }
 
   // ---- preload -------------------------------------------------------------------------
-  // Every icon in the pack is built up front, behind the first step's
-  // entrance, so a tap never stalls on a geometry build. Each icon's glyph is
-  // captured at the same moment — offscreen, at its front orientation — so the
-  // mark in a ring is framed identically no matter where the icon happened to
-  // be rotated when it was collected.
+  // Every OTHER icon in the pack is built here, so a tap never stalls on a
+  // geometry build. Each icon's glyph is captured at the same moment —
+  // offscreen, at its front orientation — so the mark in a ring is framed
+  // identically no matter where the icon happened to be rotated when it was
+  // collected.
+  //
+  // It runs AFTER the first draw (see `host.deferPreload` below), not beside
+  // it. Before that, several megabytes of icons for steps nobody had reached
+  // were fetched in parallel with the one icon and the backdrop the curtain
+  // was actually waiting for, on the same link. If a tap does outrun it,
+  // advance() holds — it does not throw.
   async function preload() {
     for (const name of packIcons) {
       try {
@@ -1517,6 +1545,10 @@ export function createSequence(doc, host) {
     } finally {
       posed();   // resolved either way: a failed acquire must not hold the curtain up
     }
+    // The rest of the pack waits for the first step to be ON SCREEN. The host
+    // resolves this once the curtain is down and a frame has been painted; a
+    // host that offers nothing here behaves exactly as before.
+    if (host.deferPreload) { try { await host.deferPreload; } catch { /* never rejects */ } }
     if (flowMode && !disposed) await preload();
   })();
   return runtime;

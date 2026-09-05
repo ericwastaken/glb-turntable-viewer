@@ -85,6 +85,15 @@ def _yaml_subset(text):
             return [scalar(x) for x in inner.split(",")] if inner else []
         if v[:1] in "&*{|>!%@`":
             raise ValueError(f"unsupported YAML syntax near {v!r}")
+        # An unquoted number is a NUMBER in YAML. Nothing in a manifest needed
+        # that until loading.slowAfter / .failAfter, and this parser has to
+        # agree with PyYAML (and with js-yaml in the viewer) or the same file
+        # passes with one and fails with the other. A quoted "15" returns above,
+        # still a string, which is also what YAML says.
+        if re.fullmatch(r"[+-]?\d+", v):
+            return int(v)
+        if re.fullmatch(r"[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?", v):
+            return float(v)
         return v
     def strip(line):
         out, q = [], None
@@ -811,7 +820,10 @@ def main(argv):
                     )
 
         # --- loading: the curtain a pack shows while it comes up -------------
-        # Three knobs only, by design: no spinner, no progress bar.
+        # Appearance is three knobs, by design: no spinner, no percentage.
+        # slowAfter/failAfter are not appearance - they are how long the viewer
+        # waits before saying a resource is slow, and before giving up on it and
+        # naming it (AGENT.md 7). Defaults 15 / 45 seconds.
         loading = manifest.get("loading")
         if loading is not None:
             if not isinstance(loading, dict):
@@ -819,8 +831,28 @@ def main(argv):
                               '{ ground: "#08080a", animation: pulse }')
             else:
                 for k in loading:
-                    if k not in ("ground", "image", "animation"):
+                    if k not in ("ground", "image", "animation", "slowAfter", "failAfter"):
                         warnings.append(f'{mf} "loading": unknown key "{k}" (ignored)')
+                waits = {}
+                for k in ("slowAfter", "failAfter"):
+                    v = loading.get(k)
+                    if v is None:
+                        continue
+                    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                        errors.append(f'{mf} "loading".{k} must be a positive number of '
+                                      f"seconds (got {v!r})")
+                    else:
+                        waits[k] = float(v)
+                # A slow threshold at or past the fail threshold can never fire:
+                # the load would give up before it ever admitted to being slow.
+                if len(waits) == 2 and waits["slowAfter"] >= waits["failAfter"]:
+                    errors.append(f'{mf} "loading".slowAfter ({waits["slowAfter"]:g}s) must be '
+                                  f'less than "loading".failAfter ({waits["failAfter"]:g}s), '
+                                  "or the slow state can never be shown")
+                for k, v in waits.items():
+                    if v > 300:
+                        warnings.append(f'{mf} "loading".{k} is {v:g}s - a visitor will have '
+                                        "given up long before the viewer does")
                 img = loading.get("image")
                 if img is not None:
                     if not isinstance(img, str) or not img.strip():

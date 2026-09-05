@@ -70,8 +70,9 @@ Defined at the bottom of `index.html`:
 window.viewer = { THREE, scene, camera, renderer, pivot, controls,
                   get model(), get component(), get sequence(),
                   stage,                  // { w, h, left, top, portrait, orientation, emulated }
-                  get curtain(),          // { up, reason: 'loading' | 'orientation' | null }
+                  get curtain(),          // { up, reason, state, message }
                   get orientation(),      // { stage, want, held }
+                  get load(), retry(),    // the load monitor; press its Retry
                   devStage };             // ?dev=mobile only: .size, .flip(), .set(w, h)
 ```
 
@@ -141,7 +142,10 @@ pane that pose *stays*, which looks like "the icon never appeared". Drive it:
 
 ```js
 const v = window.viewer, s = v.sequence, c = v.component;   // s is null without a sequence
-await s.ready;                                  // preload + glyph capture, in a flow
+await s.ready;                                  // preload + glyph capture, in a flow.
+                                                // It only STARTS once the first draw is
+                                                // painted, so this is the one honest
+                                                // "the whole pack is in" signal.
 s.duration;                                     // e.g. 3 — the CURRENT phase
 s.pause(); s.seek(0);
 c.root.scale.x;                                 // 0.52 — the wrapper Group, not the icon
@@ -332,7 +336,7 @@ Two related traps in the same family:
   ignores saved state; `localStorage.clear()` removes it. Clear it BEFORE the
   page loads, not after — the read happens at boot.
 
-## 6. Always read the status line and the console
+## 6. Always read the status line, the curtain, and the console
 
 Almost nothing in this app throws to the user. Bad component, invalid sidecar,
 missing `icons.yml`, blocked service worker, failed model load — all of it
@@ -341,6 +345,45 @@ lands as text in `#status`, often with the real error only in `console.error`.
 ```js
 document.getElementById('status').textContent;
 ```
+
+**Read it a second after the load, not at the moment of the write.** A failure
+used to be written to `#status` and then quietly overwritten by the next
+`refreshStatus()` a few lines later, so the write always looked right in a
+review of the code and the message was gone in the browser. `holdStatus()` now
+pins it, and this is how you prove it:
+
+```js
+await new Promise(r => setTimeout(r, 1500));
+document.getElementById('status').textContent;   // still the failure
+```
+
+**In bare mode (`?ui=0`) there is no status line at all** — `#status` is
+`display: none`. That is the mode a pack is actually looked at in, so check the
+curtain, which is where the same text also goes:
+
+```js
+const v = window.viewer;
+v.curtain;        // { up, reason, state: 'loading'|'slow'|'failed', message }
+v.load.failed;    // { label, detail } — the resource that did not arrive
+v.load.limits;    // { slowAfter, failAfter } in force for this pack
+v.load.log;       // [{ label, ms, how }] — every phase of the load
+v.retry();        // press Retry, and assert the curtain comes down
+```
+
+**A load that hangs is not a load that is slow.** To tell them apart
+deliberately, serve the pack behind something that accepts a connection and
+never answers (a few lines of `http.server` will do it) and watch the curtain
+move `loading` → `slow` → `failed`. Verified against the defaults: slow at
+16.5 s, failed at 46.5 s, both naming the resource. A pack may retune both with
+`loading.slowAfter` / `loading.failAfter`, which is also how you make that test
+take ten seconds instead of a minute.
+
+**Retrying needs a fresh URL.** A stalled `import()` is remembered by URL, so a
+retry at the same one re-attaches to the dead promise and never reaches the
+network. The viewer adds `?retry=<n>` per attempt; if you are checking a retry,
+assert the second request actually happened
+(`performance.getEntriesByType('resource')`, or the server's own log) rather
+than trusting that the button was pressed (`AGENT.md` §10.17).
 
 A `try/catch` around `component.update(dt)` in the render loop means a throwing
 `update` logs once per frame and keeps rendering, so "the animation is frozen"
