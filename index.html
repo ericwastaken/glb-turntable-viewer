@@ -163,6 +163,15 @@
     #editorBtns button { flex: 1; min-height: 44px; }
     #status { bottom: calc(6px + env(safe-area-inset-bottom)); font-size: 11px; }
   }
+/* --- bare mode (?ui=0) ------------------------------------------------------
+   Hides every viewer control so the page shows only what a pack draws: the
+   background layer, the canvas and the sequence overlay. The elements stay in
+   the DOM and keep their values, so nothing that reads #speed, #modelSelect or
+   the sequence transport has to care. Drag, zoom and taps still work. */
+body.bare #hud,
+body.bare #status,
+body.bare #drop,
+body.bare #editor { display: none !important; }
 </style>
 </head>
 <body>
@@ -322,6 +331,10 @@ let animCount = 0;       // how many clips we started on it (the mixer's own
 let baseLabel = '';
 
 const params = new URLSearchParams(location.search);
+// ?ui=0 (also: none/off/false/hide) strips the viewer's own controls, leaving
+// just the pack's own picture. Anything else, or absent, keeps the full UI.
+const UI_OFF = /^(0|none|off|false|hide)$/i;
+if (UI_OFF.test((params.get('ui') || '').trim())) document.body.classList.add('bare');
 const pivotParam = (params.get('pivot') || '').split(',').map(Number);
 const manualPivot = pivotParam.length === 3 && pivotParam.every(Number.isFinite)
   ? new THREE.Vector3(...pivotParam) : null;

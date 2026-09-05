@@ -286,6 +286,10 @@ is loaded the turntable spin, pivot, and sidecar controls hide — the pack owns
 its own motion, materials, and framing. Loading any other model or a new zip
 also exits the pack.
 
+Add **`?ui=0`** to hide every viewer control — picker, buttons, sequence
+transport, status line, links — so the page shows only what the pack draws.
+Handy for showing a pack as the page it is meant to be, and for screenshots.
+
 If the pack folder is already on a server, it can also be loaded unzipped with
 `?component=./my-pack/component.js` — handy while you are building it. That
 route behaves the same way (same icon dropdown, same hidden controls); the zip

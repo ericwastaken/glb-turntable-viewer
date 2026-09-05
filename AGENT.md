@@ -71,7 +71,7 @@ because components and backgrounds are same-origin only (§4).
 
 ## 4. URL parameters
 
-Five, all read once at boot from `location.search`. There is no parameter that
+Six, all read once at boot from `location.search`. There is no parameter that
 loads a zip — a zip arrives only by drop or the file picker (§7).
 
 | Parameter | Accepts | Example | Constraints / notes |
@@ -80,6 +80,7 @@ loads a zip — a zip arrives only by drop or the file picker (§7).
 | `?sidecar=` | Path or URL to a sidecar `.json` | `?sidecar=sidecars/example-emerald-glass.json` | `fetch`ed with no origin check (CORS applies). Linted on arrival; a sidecar with lint *errors* is still applied and the status line says to open the editor. Applied **before** the model loads, then re-matched against the new meshes by `prepareSidecar()`. |
 | `?component=` | Relative path to an ES module | `?component=./components/example-shader-orb.js` | **Same-origin only** — `loadComponentURL()` rejects any other origin outright with a status-line message. Loaded **after** the model finishes loading, so `?model=…&component=…` works for a `{ material }` component. |
 | `?bg=` | Relative path to an image | `?bg=backgrounds/starfield-default.jpg` | **Same-origin only** — a cross-origin value is refused and the default backdrop stays. A component's or pack's own background overrides this while loaded. |
+| `?ui=` | `0` (also `none` / `off` / `false` / `hide`) | `?ui=0` | **Bare mode**: hides every viewer control — the picker, the buttons, the sequence transport, the status line, the drop hint, the links — leaving only the background layer, the canvas and a sequence's overlay. The elements stay in the DOM with their values intact, so anything reading `#speed`, `#modelSelect` or the transport still works; drag, zoom and taps are unaffected. Use it to show a pack as the page it is meant to be, and for clean screenshots and recordings. Any other value keeps the full UI. |
 | `?pivot=` | Exactly three comma-separated finite numbers, `x,y,z`, in model units | `?pivot=0,0.5,0` | Forces the spin axis, overriding the Pivot dropdown. The model is positioned at the negation of this vector. Anything that is not three finite numbers (`?pivot=0,0.5`, `?pivot=a,b,c`) is **silently ignored** and the dropdown's mode applies. |
 
 All five combine. Verified together against a live server:
