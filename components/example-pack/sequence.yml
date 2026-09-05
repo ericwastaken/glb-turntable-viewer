@@ -41,6 +41,23 @@ resume:
   minutes: 30
   id: example-pack        # optional; defaults to the pack's name
 
+# --- pointer: how big a grab zone each icon gets -----------------------------------
+# A press is HIT-TESTED against the icons actually on screen — the big one and
+# every icon already sitting in a ring — and only the nearest hit is dragged.
+# `padding` widens each icon's grab zone by this fraction of its projected
+# radius, so a small collected object is still catchable with a thumb. A press
+# that hits nothing rotates nothing.
+hit:
+  padding: 0.25            # default 0.25
+
+# --- rest: what happens when a dragged icon is let go --------------------------------
+# The RUNTIME owns this, not the pack: `twist` below has no controller at all
+# and still comes back. A step may override the whole block.
+rest:
+  spring: true             # default true; false leaves the icon where it was left
+  dur: 0.5                 # seconds
+  ease: outBack            # the small overshoot reads as weight
+
 # --- what this sequence is allowed to touch ------------------------------------
 # Every name used in a track must be declared here. `top`/`left` are viewport
 # fractions for the element's CENTER (like the component `framing`), `size` is
@@ -149,6 +166,7 @@ steps:
           fit:   0.68            # fraction of the ring's inner diameter
           after: glyph           # …then become the flat mark
           delay: 0.40            # …this long after touchdown
+          fade:  0.12            # …cross-faded over this long (default 0.12)
 
     on:
       cta.tap: { do: advance }   # verbs: advance, restart, replay, nothing

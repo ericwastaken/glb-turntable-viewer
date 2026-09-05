@@ -154,7 +154,9 @@ s.restart();  s.step; s.time; s.slots;     // 'one', 0, [null, null, null]
 const w = v.scene.getObjectByName('sequence-landed').children[0], o = w.children[0];
 const r0 = o.rotation.y;
 for (let i = 0; i < 60; i++) if (!v.component.frozen) v.component.api.update(1/60);
-o.rotation.y === r0;                       // true
+o.rotation.y === r0 && Math.cos(r0) > 0.9999;   // true — frozen, facing front.
+// Math.cos, NOT `=== 0`: the turn to rest is tweened across the flight, so it
+// ends on 0 modulo 2*pi and nothing is assigned at touchdown (AGENT.md §12.6).
 // the call-to-action must never move:
 document.querySelector('#fg [data-seq="cta"]').getBoundingClientRect();  // identical before and after
 // and the transport must never write persisted state:
@@ -165,6 +167,69 @@ localStorage.getItem(s.storageKey) === saved;   // true
 
 `s.storageKey` is `null` unless the pack declared `resume:` — a pack that did
 not ask for persistence must leave `localStorage` completely empty.
+
+### A landed object must stay in its ring — zoom, resize, orientation
+
+**Always run this after touching anything in the sequence runtime or the
+sequence host.** The rings are DOM elements fixed to the *viewport*; a landed
+object is in the 3D *world*. Anything that changes the projection separates the
+two unless the object's world position and its fit are re-solved from the ring's
+current rect **every frame** (AGENT.md §12.6). It is silent when it breaks: the
+object simply drifts out and the ring renders empty, and the very first wheel
+click is enough (measured on the one-time landing this replaced: `[0, -17.13]` px
+and the fit off by 6% after a single click).
+
+```js
+const v = window.viewer, s = v.sequence;
+const w = v.scene.getObjectByName('sequence-landed').children[0];   // a landed icon
+const ring = document.querySelectorAll('#fg .fg-slot')[0];
+const probe = () => {                       // screen offset from the ring's centre
+  const r = ring.getBoundingClientRect();
+  const p = w.getWorldPosition(new v.THREE.Vector3()).project(v.camera);
+  return [(p.x * .5 + .5) * innerWidth  - (r.left + r.width  / 2),
+          (-p.y * .5 + .5) * innerHeight - (r.top  + r.height / 2)].map(n => +n.toFixed(2));
+};
+const zoom = dy => { for (let i = 0; i < 4; i++) v.renderer.domElement.dispatchEvent(
+  new WheelEvent('wheel', { deltaY: dy, clientX: innerWidth/2, clientY: innerHeight/2, bubbles: true }));
+  v.controls.update(); s.seek(s.time); };
+
+probe();                                    // [0, 0]
+zoom(-120);  probe();                        // [0, 0] — zoomed in
+zoom(240);   probe();                        // [0, 0] — and out
+// then resize the window, and emulate a portrait phone, and probe again: [0, 0]
+```
+
+Check the **fit ratio** with it — the object's projected diameter over the
+ring's inner diameter must stay at whatever `land.fit` says (0.72 in the example
+pack) at every viewport and every zoom, not just its position. A wrong scale
+looks almost right and is the half of this that a screenshot will not catch.
+
+### Pointer routing, and spring-back
+
+Drags are hit-tested while a sequence is live (AGENT.md §12.12), and both
+spring-back and the per-frame ring anchoring run off the render loop's `dt` —
+which a hidden pane does not deliver. Drive the frame yourself, in the render
+loop's own order:
+
+```js
+const v = window.viewer, s = v.sequence;
+const frame = (dt = 1/60, n = 1) => { for (let i = 0; i < n; i++) {
+  if (!v.component.frozen) v.component.api.update(dt);      // the pack, first
+  v.component.seq.update(dt);                               // then the sequence
+} };
+const cv = v.renderer.domElement;
+const drag = (x, y, dx, dy, st = 6) => {
+  cv.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 7, button: 0, clientX: x, clientY: y, bubbles: true }));
+  for (let i = 1; i <= st; i++) cv.dispatchEvent(new PointerEvent('pointermove',
+    { pointerId: 7, clientX: x + dx*i/st, clientY: y + dy*i/st, bubbles: true }));
+  cv.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, clientX: x + dx, clientY: y + dy, bubbles: true }));
+};
+
+drag(innerWidth/2, innerHeight*0.45, 200, 0);   // the big icon
+s.turns;                     // { gem: { yaw: 1.5708, … } } — and NOTHING else moved
+frame(1/60, 40);  s.turns;   // back to yaw 0 after the authored `rest.dur`
+// a ring's centre grabs the object landed in it; empty canvas grabs nothing
+```
 
 Two things a sequence must never change — assert them:
 

@@ -213,7 +213,11 @@ Verified specifics:
   component is loaded, and is restored on unload.
 - **`pointer`** disables `OrbitControls` rotation (zoom still works) and routes
   `pointerdown/move/up/cancel` on the canvas to your handlers, in client pixel
-  coordinates. The status line switches to "drag to spin the icon".
+  coordinates. The status line switches to "drag to spin the icon". **With a
+  sequence loaded this is superseded**: one hit-testing router owns the canvas
+  and forwards a drag to your handlers only when the press actually landed on
+  your icon (§12.12). An icon with no `pointer` at all becomes draggable there,
+  turned by the runtime.
 - **`{ icons: {…} }`** is the fourth return shape — see §7. It is checked
   before `object`/`material`.
 - **`sequence`** (only meaningful with `object`) makes the page wrap `object`
@@ -620,7 +624,11 @@ viewport and confirm the subject is still in frame — see §10.4.
 | **"My icon is invisible / tiny after the pack loads"** in a pane | The pack has a sequence, whose t=0 pose is faded-out and small; a hidden pane never advances it | §10.13 — `viewer.sequence.seek(t)` |
 | **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer, a `to:` that names nothing | §12 — the message names the track |
 | **"My edit to `sequence.js` had no effect."** | The browser served the cached module | §12.11 — hard-reload, or serve with `Cache-Control: no-store` |
-| **"The collected icon lands but keeps spinning."** | It is still in the update path; its controller reassigns rotation every frame | §12.6 — `land.mode: object` freezes it first, orients it second |
+| **"The collected icon lands but keeps spinning."** | It is still in the update path; its controller reassigns rotation every frame | §12.6 — a landing leaves the update path as the flight *begins* |
+| **"The collected icon jumps as it lands."** | Something is assigning rotation at touchdown instead of tweening to rest across the flight | §12.6 — the turn is derived from `t`, on the shortest path |
+| **"The collected icons slide out of their rings when I zoom."** | Their world position was solved once instead of re-solved from the ring's rect every frame | §12.6 — and the standing check in the `verify-in-browser` skill |
+| **"Dragging the big icon spun the collected ones too."** or "I can't grab a collected object" | Drags are hit-tested per press; check `hit.padding` and `viewer.sequence.grabbed` | §12.12 |
+| **"My icon won't stay where I dragged it."** | Spring-back is on by default | §12.12 — `rest: { spring: false }`, sequence-wide or per step |
 | **"A collected ring shows a broken image."** | Its glyph could not be derived, or the icon has no `glyphs:` entry and renders to nothing offscreen | §12.6 — ship a `glyphs:` image for that icon |
 | **"My flow resumed on the wrong step / did not resume."** | The saved state is discarded whenever `sequence.yml` moves on, and the TTL is an idle window | §12.8 |
 | **"My icon fades to nothing but still spins / my spin is gone."** | The sequence does not own spin; a `spin` channel does not exist. The icon's own controller owns rotation | §12 |
@@ -803,7 +811,7 @@ per layer rather than in one flat list.
 |---|---|---|---|
 | **background** | `#bg`, the 2D backdrop behind the canvas | The page / the pack's `background:` | Nothing (not a target) |
 | **hud** | `slots` — a row of collection rings (and the deprecated `pips`) | Created from `stage.hud` | Static `initial:` state; 2D channels; receives a collected icon |
-| **icon** | The 3D icon, under a **wrapper Group** | The pack (look, spin, drag) — the sequence gets only the wrapper | `fade`, `scale`, `rise`, and `to:` (a move to a 2D element) |
+| **icon** | The 3D icon, under a **wrapper Group** | The pack (look, idle spin) — the sequence gets the wrapper, and routes drags | `fade`, `scale`, `rise`, `to:` (a move to a 2D element), and the wrapper's drag yaw/pitch (§12.12) |
 | **overlay** | `#fg` — 2D text and buttons above the canvas | Created from `stage.overlay` | `fade`, `rise`, `blur`, `wipe`, `bloom` |
 
 `#fg` is a fixed, viewport-sized DOM layer above the canvas (real text:
@@ -813,13 +821,21 @@ built once and lives for the whole flow** — slots have to accumulate, and a
 call-to-action a visitor is about to tap must never be rebuilt under their
 finger.
 
-**Spin is structurally unavailable.** A pack's controller *assigns*
-`rotation.y` every frame from its own config, so anything a sequence wrote to
-rotation would be overwritten before render. There is no `spin`, `yaw`, or
-`rotation` channel, and there never will be. `scale`/`rise` go on the wrapper
-Group the page puts around `api.object`, never on the icon's own object. The
-single exception is a **landed** icon (§12.6): it is removed from the update
-path *first*, and only then given its resting orientation.
+**Spin is still structurally unavailable as a channel.** A pack's controller
+*assigns* `rotation.y` every frame from its own config, so anything a sequence
+wrote to that property would be overwritten before render. There is no `spin`,
+`yaw`, or `rotation` channel, and there never will be. `scale`/`rise` go on the
+wrapper Group the page puts around `api.object`, never on the icon's own object.
+
+Rotation is nonetheless written in exactly two places, and both are designed
+around that fact:
+
+- **A landing** (§12.6) owns the icon's own rotation for the whole flight. The
+  icon leaves the update path at the *first frame of the flight*, not at
+  touchdown, so exactly one thing is writing rotation at any instant.
+- **A drag** (§12.12) writes yaw and pitch on the **wrapper**, which is a
+  different property from the one a controller writes. The two compose: a
+  dragged icon keeps its own idle spin and turns with the finger at once.
 
 **Framing is solved at rest pose, once, before the t=0 pose is applied, and
 never re-solved** — not even when a flow swaps to a different icon.
@@ -852,6 +868,19 @@ requires:
 resume:
   minutes: 60                             # idle window; TTL runs from the last state change
   id: example-pack                        # localStorage key; defaults to the pack's name
+
+# How big a grab zone each icon gets, as a fraction of its projected radius
+# (§12.12). A press is hit-tested; a press that hits nothing rotates nothing.
+hit:
+  padding: 0.25                           # default 0.25
+
+# What happens when a dragged icon is let go (§12.12). The RUNTIME owns this,
+# so an icon with no controller of its own still comes back. A step may
+# override the whole block with a `rest:` of its own.
+rest:
+  spring: true                            # default true; false = leave it where it was left
+  dur: 0.5                                # seconds (default 0.5)
+  ease: outBack                           # any sequence ease (default outBack)
 
 # Every name a track may target. Positions are viewport fractions of the
 # element's CENTER (like framing.verticalCenter); size is font size as a
@@ -927,6 +956,7 @@ steps:
           fit:   0.72                     # fraction of the target's inner diameter
           after: glyph                    # optional: then become the flat mark…
           delay: 0.45                     # …this long after touchdown (default 0.4)
+          fade:  0.12                     # …cross-faded over this long (default 0.12)
     on:
       cta.tap: { do: advance }            # verbs: advance, restart, replay, nothing
     end: hold                             # hold is the only end
@@ -957,8 +987,8 @@ steps:
     end: hold
 ```
 
-Top-level keys: `version`, `ease`, `requires`, `resume`, `stage`, `initial`,
-`steps`. Anything else is ignored with a validator warning. Everything below
+Top-level keys: `version`, `ease`, `requires`, `resume`, `hit`, `rest`,
+`stage`, `initial`, `steps`. Anything else is ignored with a validator warning. Everything below
 the top level that is wrong — an undeclared target, a channel the layer does
 not have, a `to:` that names nothing, an unknown landing mode or verb, a step
 naming an icon the pack does not have, an unknown label or ease, a non-numeric
@@ -1092,17 +1122,36 @@ goes so it lands inside.
     fit:   0.72               # fraction of the target's inner diameter (default 0.72)
     after: glyph              # optional; only after an object landing
     delay: 0.45               # seconds after touchdown for `after:` (default 0.4)
+    fade:  0.12               # cross-fade object -> glyph, seconds (default 0.12)
 ```
 
-**How the destination is computed.** At the moment the transition is built,
-the target element's centre is read with `getBoundingClientRect()`, converted
-to NDC, and unprojected onto the plane through the icon's current position
-perpendicular to the camera's view direction — so both ends of the flight sit
-at the same depth and a linear tween of x, y and z is a straight line on
-screen. Measured over the example pack's 0.6 s collect: maximum deviation from
-the straight line **4.8 × 10⁻¹⁷ world units** — floating-point noise. The stage
-is persistent and the rings never move, so one measurement holds for the whole
-flight.
+**How the destination is computed — every frame, not once.** The target
+element's centre is read with `getBoundingClientRect()`, converted to NDC, and
+unprojected at a fixed **depth in front of the camera** (captured when the
+flight is planned), so both ends of the flight sit on one plane and a linear
+tween of x, y and z is a straight line on screen. Measured over the example
+pack's 0.6 s collect: maximum deviation from the straight line **4.8 × 10⁻¹⁷
+world units** — floating-point noise.
+
+That solve is **repeated on every frame, for the whole life of the landed
+object**, and the fit is re-derived with it. The rings are DOM elements fixed
+to the *viewport*; the objects are in the 3D *world*. A one-time world position
+decouples the two permanently the first time anything changes the projection.
+Measured on the old one-time landing, from an object sitting exactly at its
+ring centre: **one** wheel click moved it to `[0, -17.13]` px and pushed the fit
+from 0.7200 to 0.7628; a few more took it clean out of the ring. With the
+per-frame solve, offset stays `[0, 0]` px and the fit stays `0.7200` through
+wheel zoom (camera z 3.88 → 10.40), a resize (864×814 → 1280×800), a portrait
+phone (375×812) and an orientation change (812×375).
+
+Cost: one `getBoundingClientRect()` per ring per frame, cached for the frame,
+with the (expensive) computed border read only when a ring's size actually
+changes. The reads happen **before** the frame's DOM writes, so nothing forces
+a reflow.
+
+Do not "fix" ring drift by locking the camera during a flow. Pinch and wheel
+zoom are deliberately live in pack mode, and locking would not help a resize
+or a phone being turned anyway.
 
 **How the fit is computed.** The icon's visible radius is taken from each
 mesh's **geometry bounding sphere**, expressed about the wrapper's own origin
@@ -1119,14 +1168,30 @@ circle at 375×812.
 
 | `mode` | What is in the ring afterwards |
 |---|---|
-| `object` | the real 3D object, live but **frozen**: removed from the per-frame update path and *then* set to its resting orientation (`rotation.y = 0`) |
-| `glyph` | a flat 2D mark; the 3D object is released (hidden and never updated again) at touchdown |
-| `object` + `after: glyph` | an object landing, swapped for the glyph `delay` seconds later — the 3D motion without paying for a permanently live shader |
+| `object` | the real 3D object, live but **frozen**: it left the per-frame update path when the flight began, and the flight *tweened* it to its resting orientation |
+| `glyph` | a flat 2D mark; the 3D object is cross-faded out and released at touchdown |
+| `object` + `after: glyph` | an object landing, cross-faded to the glyph `delay` seconds later — the 3D motion without paying for a permanently live shader |
 
-The order in `object` mode is the whole trick: an icon that is still being
-updated cannot be given a resting orientation, because its own controller
-reassigns `rotation.y` on the very next frame. Verified: 60 update ticks after
-a landing leave the landed icon's rotation and scale bit-identical.
+**The turn to rest is spread across the flight, and nothing is assigned at
+touchdown.** The icon's own controller drives rotation right up to the frame
+the flight starts; on that frame the icon leaves the update path and the
+timeline takes the same property over, tweening it to front on the **shortest
+angular path** (the delta is normalised to ±π, so a turn never goes the long
+way round). Measured on the example pack's `gem`, sampled in real time through
+a collect: largest single-frame step **0.159463 rad (9.14°)** — the first frame
+of an `outCubic`, whose ease starts fastest — against an idle rate of 0.76° per
+frame, and a total sweep of **107.90°**. The old code froze mid-flight and then
+assigned `rotation.y = 0` at touchdown: a measured **275° snap in one frame**.
+
+Because nothing is assigned, a landed icon rests facing front at `rotation.y`
+**≡ 0 (mod 2π)** — it is the continuous value the turn arrived at, not a
+literal zero. Assert `Math.cos(y) > 0.9999`, not `y === 0`.
+
+**The object → glyph swap is a cross-fade, not a flip.** `land.fade` seconds
+(default 0.12) during which the 3D object's fade ramps down and the mark's
+opacity ramps up. A transition's `duration` is extended to cover it, so the
+last step of a flow — whose incoming entrance is usually zero-length — cannot
+end mid-fade.
 
 Landed icons are reparented into a `sequence-landed` Group under the pivot, so
 several icons can be on screen at once (the viewer otherwise holds exactly
@@ -1151,6 +1216,19 @@ one). Only the ACTIVE icon's `update(dt)` runs.
    to be rotated when it was collected. The icon is forced to `fade: 1` for the
    capture and put straight back — capture it at a t=0 pose and the mark comes
    back literally empty (measured: alpha coverage 0.0000).
+
+   The capture uses **the page's own camera**, cropped with `setViewOffset()` to
+   the glyph box inside the ring this icon is going to land in, with the object
+   placed at exactly the world position and scale the landed object will have.
+   The PNG is therefore the same projection, the same framing and the same
+   lighting as the live object it replaces, which is what makes the cross-fade
+   invisible. Measured against the live landed object rendered through that same
+   crop: mean absolute pixel difference **0.00024** (max per channel 1/255) and a
+   silhouette IoU of **1.00000**. The old capture — its own 40° camera, a
+   bounding-sphere fit and 8% air — scored **0.14864** and **0.51181** on the
+   same comparison, with the mark 35% too small (alpha coverage 0.20972 against
+   the object's 0.32531). An icon that no step lands still falls back to the
+   bounding-sphere frame.
 
    A pack needs no new assets for this to work. An icon whose look depends
    heavily on a backdrop (deep transmission, say) may derive a faint mark —
@@ -1288,7 +1366,13 @@ s.flow;             // true when a step's `on:` uses advance/restart
 s.step;             // id of the current step, e.g. 'two'
 s.stepIndex;        // its index
 s.phase;            // 'entrance' | 'transition'
-s.slots;            // [{icon:'twist', as:'glyph'}, null, null] at the current time
+s.slots;            // [{icon:'twist', as:'glyph', mix:1}, null, null] at the current time
+                    // `mix` is the object -> glyph cross-fade: 0 = object, 1 = mark
+s.hit;              // { padding: 0.25 } — the grab zone in force (§12.12)
+s.rest;             // { spring, dur, ease } — the spring-back in force RIGHT NOW
+s.grabbed;          // the icon being dragged, or null
+s.turns;            // { twist: { yaw, pitch, springing }, … } — the runtime's own
+                    // drag offsets, which live on each icon's WRAPPER
 s.icons;            // every icon in the pack, in manifest order
 s.advance();        // the verbs, for scripted checks — these DO persist
 s.restart();
@@ -1337,11 +1421,27 @@ s.seek(0.70);  s.slots;                         // [{icon:'twist', as:'object'},
 s.seek(1.15);  s.slots[0].as;                   // 'glyph' — the after: swap, 0.45 s later
 document.querySelector('#fg [data-seq="cta"]').getBoundingClientRect().top === before.top;  // true
 
-// --- a landed object is out of the update path
+// --- a landed object is out of the update path, and facing front
 const w = v.scene.getObjectByName('sequence-landed').children[0], o = w.children[0];
 const r0 = o.rotation.y;
 for (let i = 0; i < 60; i++) if (!v.component.frozen) v.component.api.update(1/60);
-o.rotation.y === r0 && r0 === 0;                // true — frozen, resting at front
+o.rotation.y === r0 && Math.cos(r0) > 0.9999;   // true — frozen, resting at front.
+// NOT `r0 === 0`: the turn to rest is a continuous tween across the flight, so
+// it lands on 0 MODULO 2*pi. Nothing is assigned at touchdown (§12.6).
+
+// --- a landed object is anchored to its RING, not to a world position
+const probe = () => {                             // screen offset from ring centre
+  const r = document.querySelectorAll('#fg .fg-slot')[0].getBoundingClientRect();
+  const p = w.getWorldPosition(new v.THREE.Vector3()).project(v.camera);
+  return [(p.x * .5 + .5) * innerWidth - (r.left + r.width / 2),
+          (-p.y * .5 + .5) * innerHeight - (r.top + r.height / 2)].map(n => +n.toFixed(2));
+};
+probe();                                          // [0, 0]
+v.renderer.domElement.dispatchEvent(new WheelEvent('wheel',
+  { deltaY: -120, clientX: innerWidth / 2, clientY: innerHeight / 2, bubbles: true }));
+v.controls.update(); s.seek(s.time);
+probe();                                          // [0, 0] — still. Same after a
+                                                  // resize and an orientation change.
 
 // --- the end, and restart
 s.seek(s.duration); document.querySelector('#fg [data-seq="cta"]').click();  // → three
@@ -1368,6 +1468,10 @@ const r = c.api.object.rotation.y; s.seek(2); s.seek(0); c.api.object.rotation.y
 c.api.update(1.0);                                  // only update(dt) moves it
 // framing is solved at rest pose, once:
 const cam = v.camera.position.clone(); s.seek(0); cam.equals(v.camera.position);         // true
+// a drag that hits nothing rotates nothing (§12.12):
+const before = JSON.stringify(s.turns);
+// …a pointerdown/move/up on empty canvas…
+JSON.stringify(s.turns) === before;                                                      // true
 // a pack with no sequence loads neither module:
 performance.getEntriesByType('resource').map(e => e.name).filter(n => /sequence\.js|anime/i.test(n));  // []
 ```
@@ -1378,11 +1482,81 @@ Group, restores the wrapper to scale 1 and the materials to their own flags,
 and `viewer.sequence` is `null` again. Verified: `#fg` empty, no landed group,
 transport hidden, nothing left in `localStorage`.
 
-### 12.12 Deliberately not supported
+### 12.12 Pointer — who gets the drag, and where it goes afterwards
+
+While a sequence is live, **one router owns the canvas** and every press is
+hit-tested. It replaces the old arrangement, in which every drag anywhere on
+the canvas was forwarded to the *active* icon's own handlers and a landed
+object could not be touched at all.
+
+**How a press is resolved.** Each candidate — the active icon, plus every icon
+already sitting in a ring — is projected to screen along with its own visible
+radius (the same geometry-bounding-sphere radius the landing fit uses, §12.6).
+That radius plus `hit.padding` of it is the grab zone; the **nearest** hit
+wins, and a press that hits nothing rotates nothing.
+
+```yaml
+hit:
+  padding: 0.25        # fraction of the projected radius (default 0.25)
+```
+
+Measured on the example pack's landed `gem` at 1280×800: projected radius
+**18.72 px**, grab zone **23.40 px**. A press 16.7 px and one 21.4 px from the
+centre both grab it; one at 26.4 px does not.
+
+**What the drag does.** An icon that ships its own pointer handlers (an
+`IconController` with `pointerDown`) keeps owning its rotation — the router
+only routes the gesture to it. Every other icon, *including one with no
+controller at all*, is turned by the runtime, which writes yaw and pitch to
+the icon's **wrapper**. That is deliberately a different property from the one
+a controller assigns, so the two compose rather than fight: measured on `gem`,
+a 200 px drag put 1.5708 rad on the wrapper while the controller kept its idle
+spin at exactly 0.800 rad/s throughout. A drag of the viewport's **shorter
+side** is one full turn, so the gesture is the same on a phone and a desktop;
+pitch is clamped to ±1.2 rad.
+
+Camera **rotation** is off while a sequence is live — the icons own dragging —
+but **zoom is not**: wheel and pinch work exactly as before, which is why the
+rings are anchored per frame (§12.6) rather than the camera being locked.
+
+**Spring-back.** When a runtime-owned drag ends, the icon returns to its rest
+orientation:
+
+```yaml
+rest:
+  spring: true         # default true; false leaves it where it was left
+  dur: 0.5             # seconds (default 0.5)
+  ease: outBack        # any sequence ease (default outBack)
+```
+
+- **Scope:** the block above is the sequence-wide default; **a step may carry
+  its own `rest:`**, which overrides it for whatever is dragged while that step
+  is showing. `viewer.sequence.rest` reports the one in force right now.
+- The **runtime** owns this, not the pack. The minimal example icon `twist`
+  exports no `IconController` whatsoever and still springs back — verified: a
+  160 × 60 px drag put yaw 1.25664 / pitch 0.47124 on it, `outBack` overshot to
+  −0.12506 rad, and it was back to exactly 0 at t = 0.500 s, with the icon's own
+  `rotation.y` never touched.
+- It **composes** with an idle spin rather than replacing it (the `gem`
+  measurement above), and with `spring: false` the icon simply stays: 1.5708 rad
+  still 1.5708 rad a full second later.
+- A landing outranks a spring-back: if a collect starts mid-spring the flight
+  takes the wrapper's yaw and pitch to zero along with the icon's own rotation,
+  so it arrives square.
+- Spring-back runs in **real time**, from the render loop's `dt`, not from
+  sequence time. It has to survive a phase that has already reached `end: hold`,
+  and it is a reply to a finger rather than something on a timeline — so it is
+  deliberately *not* part of `seek()`.
+
+Taps are unchanged: `on: { <element>.tap: … }` still only binds 2D elements
+(§12.7). The canvas answers drags, not taps.
+
+### 12.13 Deliberately not supported
 
 Keyframes beyond `[from, to]`; `shift`/`scale` on 2D elements; a `background`
-target; springs; responsive variants; taps on the icon (the canvas belongs to
-the icon's controller); a `goto <step>` verb (steps advance in order, or
+target; a physical spring solver (`rest:` is a tween with an `outBack`-style
+ease, §12.12); responsive variants; *taps* on the icon (the canvas answers
+drags, and routes them by hit test — §12.12); a `goto <step>` verb (steps advance in order, or
 restart); restoring a landed 3D object across a reload (a resumed ring shows
 its glyph); any URL parameter — a sequence arrives only inside a pack. If a
 request needs one of these, say so rather than approximating it.

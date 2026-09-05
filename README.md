@@ -356,14 +356,24 @@ steps:
   (`slot1`, `slot2`, …).
 - **`to:` sends the icon to any 2D element**, in a straight line, shrinking so
   it fits inside. It can stay there as the real 3D object (frozen, facing
-  front), become a flat mark, or land as the object and flatten a beat later.
+  front), become a flat mark, or land as the object and cross-fade to the mark
+  a beat later. A landed object is **anchored to its ring every frame**, so it
+  stays put and stays the right size when the visitor zooms, resizes the
+  window, or turns their phone.
 - **The marks are free.** Give an icon a `glyphs:` entry in `icons.yml` and
   that image is used; give it nothing and the viewer renders one for you,
   offscreen, before the flow starts.
 - **The sequence never owns spin.** Your icon's own controller keeps turning
-  it; there is no rotation channel. The one exception is an icon that has
-  landed in a slot — it is taken out of the animation loop first, then parked
-  facing front.
+  it; there is no rotation channel. An icon on its way into a slot is the
+  exception: it leaves the animation loop as the flight begins and the flight
+  turns it to face front, by the shortest way round, so it arrives square
+  instead of snapping at the end.
+- **Drags are hit-tested.** A press picks the nearest icon actually under it —
+  the big one, or one already sitting in a ring — and only that one turns; a
+  press on empty canvas turns nothing. Zoom (wheel and pinch) is untouched.
+  Let go and the icon springs back to face front; `rest: { spring: false }`
+  leaves it where it was left, and a step can override the sequence's default.
+  This works for an icon with no controller of its own — the viewer owns it.
 - Fading works out of the box for icons built from three.js standard
   materials. An icon with its own shader material should expose `setFade(v)`
   on the object it returns; otherwise the fade is skipped and the console says

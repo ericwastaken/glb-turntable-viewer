@@ -11,8 +11,15 @@
 //     A pack controller assigns `rotation.y` every frame, so a spin channel
 //     would be overwritten before render. `scale` / `rise` go on a WRAPPER
 //     Group the host puts around the icon; the icon's own object is untouched.
-//     The one exception is a LANDED icon, which is removed from the update
-//     path FIRST and only then given its resting orientation.
+//     There are exactly two exceptions, and both take the icon OUT of the
+//     update path first: a LANDING, which owns the icon's rotation for the
+//     whole flight and tweens it to rest so it ARRIVES facing front; and a
+//     DRAG, whose yaw/pitch live on the wrapper — a different property from
+//     the one a controller writes — so the two compose instead of fighting.
+//   - A landed object is anchored to its ring EVERY FRAME. The rings are DOM
+//     elements fixed to the viewport and the objects are in the 3D world, so a
+//     one-time world position decouples the two on the first zoom, resize or
+//     orientation change. The host re-solves it from the ring's current rect.
 //   - Framing is solved by the host at rest pose BEFORE the t=0 pose is
 //     applied, and never re-solved — not even when the flow swaps icons.
 //   - Anime.js is created paused and driven by tl.seek(t) from the host's
@@ -60,6 +67,15 @@ const DEFAULTS = {
 export const ELEMENT_TYPES = { hud: ['slots', 'pips'], overlay: ['text', 'button'] };
 export const ACTIONS = ['replay', 'nothing', 'advance', 'restart'];
 export const LAND_MODES = ['object', 'glyph'];
+const DEFAULT_FIT = 0.72;        // fraction of the target's inner diameter
+const DEFAULT_XFADE = 0.12;      // seconds of object -> glyph cross-fade
+const DEFAULT_PADDING = 0.25;    // grab zone, as a fraction of the projected radius
+const REST_DEFAULT = { spring: true, dur: 0.5, ease: 'outBack' };
+const REST_KEYS = ['spring', 'dur', 'ease'];
+// A drag of the viewport's SHORTER side is one full turn, so the gesture feels
+// the same on a phone and on a desktop.
+const DRAG_TURN = 2 * Math.PI;
+const DRAG_PITCH_LIMIT = 1.2;    // radians; past this an icon reads as tumbling
 // Anime.js v4 easing names (the parametrised forms and springs are left out).
 export const EASE_NAME = /^(linear|none|in|out|inOut|outIn|(in|out|inOut|outIn)(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$/;
 const CUBIC_BEZIER = /^cubic-bezier\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)$/;
@@ -70,6 +86,10 @@ const STORE_PREFIX = 'glb-viewer:seq:';
 const STORE_VERSION = 1;
 
 const fail = (where, msg) => { throw new Error(`sequence: ${where}: ${msg}`); };
+const mix = (a, b, k) => a + (b - a) * k;
+// The SHORTEST way round to an angle. Without this a landing from 4.80 rad
+// took the 275-degree route to 0 instead of the 85-degree one.
+const shortest = d => Math.atan2(Math.sin(d), Math.cos(d));
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const num = (v, where) => (typeof v === 'number' && Number.isFinite(v)) ? v : fail(where, `expected a number, got ${JSON.stringify(v)}`);
 const frac = (v, where) => { const n = num(v, where); return Math.min(1, Math.max(0, n)); };
@@ -174,6 +194,14 @@ function renderSlots(b, at) {
     if ((cell.img.getAttribute('src') || '') !== src) {
       if (src) { cell.img.setAttribute('src', src); cell.img.hidden = false; }
       else { cell.img.removeAttribute('src'); cell.img.hidden = true; }
+    }
+    // `mix` is the CROSS-FADE with the 3D object the glyph is replacing: the
+    // mark fades up while the object fades down, so the swap is not a visible
+    // flip between two things that never look quite identical.
+    if (src) {
+      const op = f.mix === undefined ? 1 : Math.min(1, Math.max(0, f.mix));
+      const str = op >= 1 ? '' : String(op.toFixed(4));
+      if (cell.img.style.opacity !== str) cell.img.style.opacity = str;
     }
   }
 }
@@ -351,6 +379,34 @@ export function createSequence(doc, host) {
     if (end !== 'hold') warnings.push(`steps.${stepId(s, i)}.end: "${end}" is not implemented — holding the final frame (end: hold is the only end).`);
   });
 
+  // ---- hit: the grab zone ------------------------------------------------------------
+  // Pointer input is HIT-TESTED, not broadcast: a press picks the nearest icon
+  // whose projected circle (plus this padding) contains it. Before this, every
+  // drag anywhere on the canvas went to the active icon, and a landed object
+  // could not be touched at all.
+  const hitDecl = doc.hit ?? {};
+  if (!isObj(hitDecl)) fail('hit', 'must be a mapping such as { padding: 0.25 }');
+  for (const k of Object.keys(hitDecl)) if (k !== 'padding') warnings.push(`hit: unknown key "${k}" (ignored)`);
+  const hitPadding = hitDecl.padding === undefined ? DEFAULT_PADDING : num(hitDecl.padding, 'hit.padding');
+
+  // ---- rest: does a disturbed icon come back? -----------------------------------------
+  // Sequence-wide default, overridable per step. The RUNTIME owns this, not the
+  // pack: an icon with no controller at all (the minimal example ships one)
+  // must still spring back, so it cannot be delegated to the icon's own code.
+  function readRest(decl, where, base) {
+    if (decl === undefined || decl === null) return base;
+    if (!isObj(decl)) fail(where, 'must be a mapping such as { spring: true, dur: 0.8, ease: outBack }');
+    for (const k of Object.keys(decl)) if (!REST_KEYS.includes(k)) warnings.push(`${where}: unknown key "${k}" (ignored)`);
+    if (decl.spring !== undefined && typeof decl.spring !== 'boolean') fail(`${where}.spring`, 'must be true or false');
+    return {
+      spring: decl.spring === undefined ? base.spring : decl.spring,
+      dur: decl.dur === undefined ? base.dur : Math.max(0, num(decl.dur, `${where}.dur`)),
+      ease: decl.ease === undefined ? base.ease : resolveEase(decl.ease, `${where}.ease`),
+    };
+  }
+  const restDefault = readRest(doc.rest, 'rest', REST_DEFAULT);
+  const stepRest = steps.map((s, i) => readRest(s.rest, `steps.${stepId(s, i)}.rest`, restDefault));
+
   // ---- fade capability -------------------------------------------------------------
   const degrade = doc.requires?.['icon.fade']?.degrade ?? 'scale-only';
   if (degrade !== 'scale-only') fail('requires.icon.fade', `degrade "${degrade}" is not supported — the only supported degrade is scale-only`);
@@ -399,19 +455,26 @@ export function createSequence(doc, host) {
   }
   for (const b of Object.values(bind)) if (b.type === 'pips') setPips(b.el, b.pips?.filled ?? 0, b.pips?.total ?? 3);
 
-  // ---- which ring does each step land in? ------------------------------------------
-  // Read off the step's own `exit:` list, so nothing is declared twice.
-  const stepSlot = steps.map((s, i) => {
+  // ---- where does each step land its icon? -------------------------------------------
+  // Read off the step's own `exit:` list, so nothing is declared twice. The
+  // destination and the fit are needed twice: by the flight, and — before the
+  // flow has run at all — by the GLYPH CAPTURE, which frames the mark through
+  // the very ring the object will occupy so the two are interchangeable.
+  const stepLand = steps.map((s, i) => {
     const track = (Array.isArray(s.exit) ? s.exit : []).find(e => isObj(e) && e.to !== undefined);
-    if (!track) return -1;
+    if (!track) return null;
     const b = bind[track.to];
     if (!b) fail(`steps.${stepId(s, i)}.exit`, `to: "${track.to}" is not a declared 2D element`);
-    return b.kind === 'cell' ? b.index : -1;
+    const fit = track.land?.fit === undefined ? DEFAULT_FIT : num(track.land.fit, `steps.${stepId(s, i)}.exit.land.fit`);
+    return { to: track.to, el: b.el, fit, slot: b.kind === 'cell' ? b.index : -1 };
   });
+  const stepSlot = stepLand.map(l => (l ? l.slot : -1));
 
   // ---- persistence ------------------------------------------------------------------
   const slotCount = slotsBind ? slotsBind.count : 0;
-  const flow = { index: startIndex, filled: new Array(slotCount).fill(null) };
+  // `landed` is the anchoring record: which icon is in each ring, and the
+  // element + fit + depth its world position is re-solved from every frame.
+  const flow = { index: startIndex, filled: new Array(slotCount).fill(null), landed: new Array(slotCount).fill(null) };
   const resume = doc.resume ?? null;
   if (resume !== null && !isObj(resume)) fail('resume', 'must be a mapping such as { minutes: 60 }');
   const resumeMinutes = resume ? num(resume.minutes ?? 0, 'resume.minutes') : 0;
@@ -595,7 +658,7 @@ export function createSequence(doc, host) {
     p.on = stepOns[i];
     phase = p;
     for (const h of handles.values()) if (h !== p.actor) h.wrapper.visible = false;
-    if (p.actor) { host.rest(p.actor); p.actor.wrapper.visible = true; }
+    if (p.actor) { toRest(p.actor); p.actor.wrapper.visible = true; }
     seekTo(0);
   }
 
@@ -624,29 +687,42 @@ export function createSequence(doc, host) {
         if (!LAND_MODES.includes(mode)) fail(`${w}.land.mode`, `must be one of ${LAND_MODES.join(', ')}`);
         const face = land.face ?? 'front';
         if (face !== 'front') fail(`${w}.land.face`, 'the only resting orientation this viewer can set is "front"');
-        const fit = land.fit === undefined ? 0.72 : num(land.fit, `${w}.land.fit`);
+        const fit = land.fit === undefined ? DEFAULT_FIT : num(land.fit, `${w}.land.fit`);
         if (land.after !== undefined && land.after !== 'glyph') fail(`${w}.land.after`, 'the only follow-up landing is "glyph"');
         if (land.after === 'glyph' && mode !== 'object') fail(`${w}.land.after`, 'only an object landing can be swapped to a glyph afterwards');
         const delay = land.delay === undefined ? 0.4 : num(land.delay, `${w}.land.delay`);
+        const xfade = land.fade === undefined ? DEFAULT_XFADE : Math.max(0, num(land.fade, `${w}.land.fade`));
+        for (const k of Object.keys(land)) {
+          if (!['mode', 'face', 'fit', 'after', 'delay', 'fade'].includes(k)) warnings.push(`${w}.land: unknown key "${k}" (ignored)`);
+        }
         const h = p.actor;
         if (!h) fail(w, `step "${stepId(sOut, from)}" has no \`icon:\` to send`);
 
-        // Measured NOW, from the live DOM: the stage is persistent and the
-        // rings never move, so one measurement holds for the whole flight.
+        // ONE eased progress drives the whole flight — position, scale AND the
+        // turn to rest. The destination itself is NOT baked in here: it is
+        // re-solved from the ring's live rect every frame (render(), below),
+        // because the ring is a viewport-fixed DOM element and any camera or
+        // viewport change moves it. `plan` supplies only the two things that
+        // genuinely are fixed: where the flight starts, and the depth in front
+        // of the camera the icon holds from here on.
         const plan = host.planMove(h, dest.el, fit);
-        const state = { ...plan.from };
-        p.tl.add(state, {
-          x: [plan.from.x, plan.to.x], y: [plan.from.y, plan.to.y], z: [plan.from.z, plan.to.z],
-          s: [plan.from.s, plan.to.s], duration: dur * 1000, ease,
-        }, at * 1000);
+        const prog = { p: 0 };
+        p.tl.add(prog, { p: [0, 1], duration: dur * 1000, ease }, at * 1000);
         const touchdown = at + dur;
         p.move = {
-          handle: h, state, mode, touchdown,
+          handle: h, prog, mode, touchdown, flightStart: at, xfade,
+          el: dest.el, fit, depth: plan.depth, from: plan.from,
+          // Captured the first time the flight is actually reached: the icon's
+          // own controller is still turning it right up to that instant, so no
+          // earlier value is the truth. Once captured it never changes, which
+          // is what keeps seeking back and forth through a landing exact.
+          rot: null,
           releaseAt: mode === 'glyph' ? touchdown : (land.after === 'glyph' ? touchdown + delay : null),
         };
         if (dest.kind === 'cell' && slotsBind) {
           p.pending = { index: dest.index, at: touchdown, glyphAt: p.move.releaseAt };
           flow.filled[dest.index] = fillEntry(h.name, p.move.releaseAt === null ? 'object' : 'glyph');
+          flow.landed[dest.index] = { icon: h.name, el: dest.el, fit, depth: plan.depth };
         }
       },
     });
@@ -667,22 +743,37 @@ export function createSequence(doc, host) {
     }
     z.apply();
     p.duration = Math.max(exitEnd, inEnd);
+    // A landing is not finished until its object -> glyph CROSS-FADE is. Without
+    // this the last step of a flow (whose incoming entrance is zero-length) ends
+    // exactly at touchdown and the fade freezes half-done — the object never
+    // leaves and the mark never arrives.
+    if (p.move && p.move.releaseAt !== null) p.duration = Math.max(p.duration, p.move.releaseAt + p.move.xfade);
     p.on = stepOns[to ?? from];
     phase = p;
-    if (p.incoming) { host.rest(p.incoming); p.incoming.wrapper.visible = false; }
+    if (p.incoming) { toRest(p.incoming); p.incoming.wrapper.visible = false; }
     seekTo(0);
   }
 
   // ---- what a phase shows at time t --------------------------------------------------
+  // How far through the object -> glyph cross-fade we are: 0 = the object
+  // alone, 1 = the mark alone. `as` still flips at releaseAt, so a ring reports
+  // 'glyph' from the instant the swap starts and the fade is the presentation.
+  function glyphMix(m) {
+    if (!m || m.releaseAt === null) return 0;
+    if (m.xfade <= 0) return t >= m.releaseAt ? 1 : 0;
+    return Math.min(1, Math.max(0, (t - m.releaseAt) / m.xfade));
+  }
+
   function slotAt(i) {
     const f = flow.filled[i];
     if (!f) return null;
     const p = phase?.pending;
     if (p && p.index === i) {
       if (t < p.at) return null;                                    // still in the air
-      if (p.glyphAt !== null && t < p.glyphAt) return { ...f, as: 'object' };
+      if (p.glyphAt !== null && t < p.glyphAt) return { ...f, as: 'object', mix: 0 };
+      if (p.glyphAt !== null) return { ...f, mix: glyphMix(phase.move) };
     }
-    return f;
+    return { ...f, mix: 1 };
   }
 
   function applyCopy() {
@@ -703,44 +794,137 @@ export function createSequence(doc, host) {
     host.setActive(h ?? null);
   }
 
+  // ---- drag: the runtime's own yaw/pitch, on the WRAPPER --------------------------------
+  // Deliberately not on the icon's own object: a controller assigns that every
+  // frame and would erase this before render. On the wrapper the two compose —
+  // a dragged `gem` keeps its idle spin and turns with the finger at once —
+  // and an icon with no controller at all becomes draggable for free.
+  const drags = new Map();      // handle -> { yaw, pitch, tl, at, dur }
+  function dragOf(h) {
+    let d = drags.get(h);
+    if (!d) drags.set(h, d = { yaw: 0, pitch: 0, tl: null, at: 0, dur: 0 });
+    return d;
+  }
+  function applyDrag(h) {
+    const d = drags.get(h);
+    h.wrapper.rotation.set(d ? d.pitch : 0, d ? d.yaw : 0, 0);
+  }
+  // Back to rest means back to rest: position, scale AND whatever a finger
+  // left on the wrapper.
+  function toRest(h) {
+    host.rest(h);
+    const d = drags.get(h);
+    if (d) { d.yaw = 0; d.pitch = 0; d.tl = null; }
+  }
+
   function applyIcon(h, s) {
     if (!h) return;
     h.wrapper.scale.setScalar(s.scale);
     h.wrapper.position.set(0, s.rise, 0);
+    applyDrag(h);
     fadeFor(h)?.(s.fade);
   }
 
+  // Every landed object, re-solved against its ring's CURRENT rect. The rings
+  // are DOM elements fixed to the viewport, so one measurement at touchdown is
+  // wrong the moment anything changes the projection — a wheel zoom moved a
+  // landed object 67 px out of its ring. Three rect reads a frame, cached.
+  function anchorLanded() {
+    const m = phase?.move;
+    for (const L of flow.landed) {
+      if (!L) continue;
+      const h = handles.get(L.icon);
+      if (!h) continue;
+      if (m && m.handle === h && t < m.touchdown) continue;   // still in the air
+      // An icon a later step puts back on the canvas as the hero is that
+      // step's to place, not this pass's.
+      if (h === phase?.incoming || (phase?.kind === 'entrance' && h === phase.actor)) continue;
+      const a = host.anchor(h, L.el, L.fit, L.depth);
+      h.wrapper.position.set(a.x, a.y, a.z);
+      h.wrapper.scale.setScalar(a.s);
+      applyDrag(h);
+    }
+  }
+
+  // The landing turn. Captured once, at the frame the flight is first reached,
+  // and normalised to the SHORTEST way round: a measured collect used to spin
+  // to 4.8002 rad, freeze, and then snap to 0 in one frame — 275 degrees of
+  // it. Now the turn is spread across the flight and the icon arrives facing
+  // front with nothing left to assign.
+  function captureRest(h) {
+    const o = h.api.object.rotation, d = dragOf(h);
+    // The angle is NOT wrapped into (-pi, pi] first, and that is deliberate:
+    // wrapping is the same orientation but a 2*pi step in the number, which is
+    // exactly the discontinuity this is here to remove. The turn is therefore
+    // continuous and the icon rests facing front at `rotation.y` = 0 MODULO
+    // 2*pi — nothing is assigned, so nothing can snap.
+    return {
+      x: o.x, y: o.y, z: o.z,
+      dx: shortest(-o.x), dy: shortest(-o.y), dz: shortest(-o.z),
+      yaw: d.yaw, pitch: d.pitch,
+    };
+  }
+
   function render() {
+    host.beginFrame?.();
+    // 3D first, 2D second: the anchoring READS the rings' rects, and reading
+    // them before this frame's DOM writes keeps it off the layout critical
+    // path instead of forcing a reflow per ring.
+    const ib = bind.icon, p = phase;
+    if (ib && p) {
+      // The INCOMING icon owns the entrance channels during a transition; the
+      // outgoing one owns the exit channels and, if there is one, the move.
+      if (p.incoming) {
+        applyIcon(p.incoming, ib.state);
+        p.incoming.wrapper.visible = t >= p.swapAt;
+      } else if (p.kind === 'entrance') {
+        applyIcon(p.actor, ib.state);
+      }
+      if (p.kind === 'transition' && p.actor) {
+        if (p.move) renderMove(p.move, ib);
+        else applyIcon(p.actor, ib.outState);
+      }
+      anchorLanded();
+      setActive((p.incoming && t >= p.swapAt) ? p.incoming
+        : (p.move && t >= p.move.flightStart ? null : p.actor));
+    }
     applyCopy();
     for (const b of Object.values(bind)) if (b.kind === 'dom' && b.type !== 'slots' && b.type !== 'pips') renderDom(b);
     if (slotsBind) renderSlots(slotsBind, slotAt);
-    const ib = bind.icon, p = phase;
-    if (!ib || !p) return;
-    // The INCOMING icon owns the entrance channels during a transition; the
-    // outgoing one owns the exit channels and, if there is one, the move.
-    if (p.incoming) {
-      applyIcon(p.incoming, ib.state);
-      p.incoming.wrapper.visible = t >= p.swapAt;
-    } else if (p.kind === 'entrance') {
-      applyIcon(p.actor, ib.state);
+  }
+
+  function renderMove(m, ib) {
+    const h = m.handle, w = h.wrapper, k = m.prog.p;
+    // The controller drives rotation right up to the flight, and the timeline
+    // from the flight on — the hand-over is the same instant the icon leaves
+    // the update path, so there is no frame where both write and none where
+    // neither does.
+    const flying = t >= m.flightStart;
+    host.setFrozen(h, flying);
+    if (!flying) {
+      m.rot = null;                                  // seeking back before the flight
+    } else if (t <= m.touchdown) {
+      if (!m.rot) m.rot = captureRest(h);
+      const r = m.rot, o = h.api.object.rotation, d = dragOf(h);
+      o.x = r.x + r.dx * k; o.y = r.y + r.dy * k; o.z = r.z + r.dz * k;
+      d.tl = null;                                   // a landing outranks a spring-back
+      d.yaw = r.yaw * (1 - k); d.pitch = r.pitch * (1 - k);
     }
-    if (p.kind === 'transition' && p.actor) {
-      if (p.move) {
-        const m = p.move, w = m.handle.wrapper;
-        w.position.set(m.state.x, m.state.y, m.state.z);
-        w.scale.setScalar(m.state.s);
-        fadeFor(m.handle)?.(ib.outState.fade);
-        w.visible = !(m.releaseAt !== null && t >= m.releaseAt);
-        // Frozen means REMOVED FROM THE UPDATE PATH first and given its
-        // resting orientation second — the icon's own controller would
-        // otherwise overwrite the rotation on the very next frame (measured).
-        host.setFrozen(m.handle, t >= m.touchdown);
-      } else {
-        applyIcon(p.actor, ib.outState);
-      }
+    // Past touchdown nothing above is written at all: the icon is already at
+    // rest, and leaving it alone is what lets a visitor spin it in its ring.
+
+    // Position and scale interpolate toward the ring's LIVE anchor, so a camera
+    // or viewport change mid-flight bends the path to where the ring IS rather
+    // than to where it was. After touchdown anchorLanded() owns them outright.
+    if (t < m.touchdown) {
+      const a = host.anchor(h, m.el, m.fit, m.depth);
+      w.position.set(mix(m.from.x, a.x, k), mix(m.from.y, a.y, k), mix(m.from.z, a.z, k));
+      w.scale.setScalar(mix(m.from.s, a.s, k));
+      applyDrag(h);
     }
-    setActive((p.incoming && t >= p.swapAt) ? p.incoming
-      : (p.move && t >= p.move.touchdown ? null : p.actor));
+    const x = glyphMix(m);
+    fadeFor(h)?.(ib.outState.fade * (1 - x));
+    w.visible = x < 1;
   }
 
   function seekTo(seconds) {
@@ -778,12 +962,92 @@ export function createSequence(doc, host) {
     if (!flowMode || disposed) return;
     flow.index = 0;
     setFilledFromNames(initialFilled);             // rings empty INSTANTLY — state, not animation
-    for (const h of handles.values()) { host.setFrozen(h, false); host.rest(h); h.wrapper.visible = false; }
+    flow.landed.fill(null);
+    for (const h of handles.values()) { host.setFrozen(h, false); toRest(h); h.wrapper.visible = false; }
     if (bind.icon) { Object.assign(bind.icon.state, DEFAULTS.icon); Object.assign(bind.icon.outState, DEFAULTS.icon); }
     lastCopy = undefined;
     enterStep(0);
     playing = true;
     save();
+  }
+
+  // ---- pointer routing -------------------------------------------------------------------
+  // Which icons can actually be grabbed right now: the active one, and every
+  // landed one that is still on screen. An icon in flight is deliberately not
+  // on the list — it belongs to the timeline until it touches down.
+  function grabCandidates() {
+    const out = [];
+    const m = phase?.move;
+    for (const L of flow.landed) {
+      if (!L) continue;
+      const h = handles.get(L.icon);
+      if (!h || !h.wrapper.visible || out.includes(h)) continue;
+      if (m && m.handle === h && t < m.touchdown) continue;
+      out.push(h);
+    }
+    if (activeHandle && activeHandle.wrapper.visible && !out.includes(activeHandle)) out.push(activeHandle);
+    return out;
+  }
+
+  // The `rest:` in force right now — the step being shown, or the sequence's
+  // own default.
+  function restNow() {
+    const p = phase;
+    const i = (p && p.inStep !== null && p.inStep !== undefined && t >= (p.swapAt ?? Infinity)) ? p.inStep : (p?.outStep ?? flow.index);
+    return stepRest[i] ?? restDefault;
+  }
+
+  let grab = null;   // { handle, x, y, forward }
+  const router = {
+    down(x, y) {
+      const h = host.hitTest?.(grabCandidates(), x, y, hitPadding) ?? null;
+      if (!h) return false;                        // a drag on nothing rotates nothing
+      dragOf(h).tl = null;                         // a new grab cancels a spring-back
+      // An icon that ships its own pointer handlers keeps owning its rotation;
+      // the runtime only routes the gesture to it. Everything else — including
+      // an icon with no controller at all — is turned by the runtime.
+      grab = { handle: h, x, y, forward: h.api.pointer ?? null };
+      grab.forward?.down?.(x, y);
+      return true;
+    },
+    move(x, y) {
+      if (!grab) return;
+      if (grab.forward) { grab.forward.move?.(x, y); return; }
+      const side = Math.max(1, Math.min(innerWidth, innerHeight));
+      const d = dragOf(grab.handle);
+      d.yaw += ((x - grab.x) / side) * DRAG_TURN;
+      d.pitch = Math.max(-DRAG_PITCH_LIMIT, Math.min(DRAG_PITCH_LIMIT, d.pitch + ((y - grab.y) / side) * DRAG_TURN));
+      grab.x = x; grab.y = y;
+      if (!playing) render();                      // a held phase still has to redraw
+    },
+    up() {
+      if (!grab) return;
+      const g = grab; grab = null;
+      if (g.forward) { g.forward.up?.(); return; }
+      const cfg = restNow();
+      const d = dragOf(g.handle);
+      if (!cfg.spring || cfg.dur <= 0) return;     // `spring: false` leaves it where it was left
+      if (!d.yaw && !d.pitch) return;
+      // A real tween, not a per-frame decay, so the authored ease (outBack's
+      // overshoot, say) is the one Anime.js implements.
+      d.tl = createTimeline({ autoplay: false, defaults: { composition: 'none' } });
+      d.tl.add(d, { yaw: 0, pitch: 0, duration: cfg.dur * 1000, ease: cfg.ease }, 0);
+      d.at = 0; d.dur = cfg.dur;
+    },
+  };
+
+  // Spring-back runs in REAL time, not sequence time: it answers a finger, not
+  // a timeline, and must survive a phase that has already reached `end: hold`.
+  function stepSprings(dt) {
+    let moved = false;
+    for (const d of drags.values()) {
+      if (!d.tl) continue;
+      d.at += dt;
+      d.tl.seek(Math.min(d.at, d.dur) * 1000);
+      if (d.at >= d.dur) { d.tl = null; d.yaw = 0; d.pitch = 0; }
+      moved = true;
+    }
+    return moved;
   }
 
   // The listeners are attached ONCE — the element must not be rebuilt under a
@@ -823,7 +1087,11 @@ export function createSequence(doc, host) {
         // empty (measured: alpha coverage 0.0000). render() below puts the
         // fade back to whatever the current time says it should be.
         fadeFor(h)?.(1);
-        const g = await host.glyphFor(h);
+        // Frame the mark through the very ring this icon lands in, so the PNG
+        // and the live object are the same projection at the same size and the
+        // cross-fade between them has nothing to give away.
+        const k = steps.findIndex(st => st.icon === name);
+        const g = await host.glyphFor(h, k >= 0 ? stepLand[k] : null);
         if (g) glyphs.set(name, g);
         if (!disposed) render();
       } catch (err) {
@@ -850,7 +1118,14 @@ export function createSequence(doc, host) {
     get time() { return t; },
     get playing() { return playing; },
     // Ring presentation at the current time — for deterministic checks.
-    get slots() { return Array.from({ length: slotCount }, (_, i) => { const f = slotAt(i); return f ? { icon: f.icon, as: f.as } : null; }); },
+    // `mix` is the object -> glyph cross-fade (0 = object, 1 = mark).
+    get slots() { return Array.from({ length: slotCount }, (_, i) => { const f = slotAt(i); return f ? { icon: f.icon, as: f.as, mix: f.mix ?? 1 } : null; }); },
+    // The grab zone and the spring-back in force, and what is being dragged —
+    // for deterministic checks of §12.12.
+    get hit() { return { padding: hitPadding }; },
+    get rest() { return { ...restNow() }; },
+    get grabbed() { return grab?.handle.name ?? null; },
+    get turns() { return Object.fromEntries([...drags].map(([h, d]) => [h.name, { yaw: d.yaw, pitch: d.pitch, springing: !!d.tl }])); },
     // A snapshot of every target's channel state — for deterministic checks.
     get states() { return Object.fromEntries(Object.entries(bind).filter(([, b]) => b.state).map(([n, b]) => [n, { ...b.state }])); },
     get saved() { return storeKey ? readSaved(storeKey) : null; },
@@ -861,22 +1136,37 @@ export function createSequence(doc, host) {
     // Called by the host's render loop AFTER the pack's own update(dt).
     // `end: hold` is the whole termination story: clamp and stop.
     update(dt) {
-      if (!playing || disposed || !phase) return;
-      seekTo(t + dt);
-      if (t >= phase.duration) playing = false;
+      if (disposed || !phase) return;
+      // Called EVERY frame, playing or not: a held phase still has to settle a
+      // spring-back and still has to keep its landed objects anchored to rings
+      // that the camera or the viewport may have moved under them.
+      stepSprings(dt);
+      if (playing) {
+        seekTo(t + dt);
+        if (t >= phase.duration) playing = false;
+      } else {
+        render();
+      }
     },
     dispose() {
       if (disposed) return;
       disposed = true; playing = false;
+      host.detachDrag?.();
+      grab = null;
+      for (const d of drags.values()) d.tl = null;
       for (const [el, h] of listeners) el.removeEventListener('click', h);
       for (const b of Object.values(bind)) if (b.kind === 'dom') b.el.remove();
-      for (const h of handles.values()) { host.setFrozen(h, false); host.rest(h); fadeFor(h)?.(1); h.wrapper.visible = true; }
+      for (const h of handles.values()) { host.setFrozen(h, false); toRest(h); fadeFor(h)?.(1); h.wrapper.visible = true; }
       host.dispose?.();
     },
   };
 
   for (const w of warnings) console.warn(`[sequence] ${file}: ${w}`);
   host.root.appendChild(frag);
+  // One router for the whole sequence, hit-testing every press. It replaces
+  // the host's per-icon pointer attachment, which sent every drag anywhere on
+  // the canvas to the active icon and gave landed objects nothing.
+  host.attachDrag?.(router);
 
   // The starting step's icon is usually the one the viewer already loaded (put
   // it first in icons.yml and it always is). When a resume lands elsewhere the

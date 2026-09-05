@@ -18,14 +18,17 @@ Say no (and say why) rather than approximating, if the request is any of:
 
 - **Spin, yaw, rotation, "spins in and settles".** The icon's controller
   assigns `rotation` every frame; a sequence cannot own it and has no channel
-  for it. Such motion belongs in the icon module. (The one exception is an
-  icon that has *landed* in a slot: it leaves the update path first, and only
-  then gets its resting orientation.)
+  for it. Such motion belongs in the icon module. Two things do write rotation,
+  and neither is a channel you can author: a **landing** takes the icon out of
+  the update path as the flight begins and turns it to face front across the
+  flight (§12.6), and a **drag** puts yaw/pitch on the icon's wrapper, tuned by
+  `hit:` and `rest:` (§12.12).
 - **Camera / framing.** Framing is solved at rest pose once, from the FIRST
   icon's `LAYOUT`, and never re-solved — a flow's icons all share it.
-- **Keyframes** (more than `[from, to]`), **springs**, **background fades**, a
+- **Keyframes** (more than `[from, to]`), a **physical spring solver**
+  (`rest:` is a tween with an ease — §12.12), **background fades**, a
   **`goto <step>`** verb, **going backwards** through a flow, or restoring a
-  landed 3D object across a reload. `AGENT.md` §12.12.
+  landed 3D object across a reload. `AGENT.md` §12.13.
 
 Everything else — an entrance, copy, a call-to-action, slots, a collect flow,
 retiming — is exactly what it is for.
@@ -159,8 +162,17 @@ Checklist for a flow:
 - **`land.mode`** — `object` keeps the real 3D object in the ring (frozen,
   front-facing); `glyph` drops a flat mark and releases the object;
   `mode: object` + `after: glyph` gives the 3D motion then flattens `delay`
-  seconds later. Prefer `after: glyph` unless a live object in the ring is the
-  point — a permanently live shader is not free.
+  seconds later, cross-faded over `land.fade` (default 0.12 s). Prefer
+  `after: glyph` unless a live object in the ring is the point — a permanently
+  live shader is not free.
+- **`hit: { padding: 0.25 }`** widens every icon's grab zone by that fraction of
+  its projected radius. Raise it when the collected objects are small enough to
+  be fiddly with a thumb; a press that hits nothing rotates nothing either way.
+- **`rest: { spring: true, dur: 0.5, ease: outBack }`** is what happens when a
+  dragged icon is let go. It is sequence-wide, and any step may carry its own
+  `rest:` to override it. The RUNTIME owns it, so it works for an icon that
+  exports no `IconController` at all; an icon that ships its own pointer
+  handlers keeps owning its own rotation and its own return.
 - **`fit`** is the fraction of the ring's INNER diameter the icon's visible
   extent should occupy. 0.72 reads well; measure it, don't guess.
 - **The last step should have no `icon:`.** That is the end state: nothing on
@@ -247,8 +259,12 @@ point of `land.mode: object`:
 const w = v.scene.getObjectByName('sequence-landed').children[0], o = w.children[0];
 const r0 = o.rotation.y;
 for (let i = 0; i < 60; i++) if (!v.component.frozen) v.component.api.update(1/60);
-o.rotation.y === r0 && r0 === 0;             // true — frozen, resting at front
+o.rotation.y === r0 && Math.cos(r0) > 0.9999;   // true — frozen, resting at front
 ```
+
+`Math.cos(r0)`, not `r0 === 0`: the turn to rest is a continuous tween across
+the flight, so it ends on 0 **modulo 2π**. Nothing is assigned at touchdown —
+that assignment was the 275° snap this replaced (§12.6).
 
 And the invariants that must survive any change:
 

@@ -190,15 +190,19 @@ ELEMENT_KEYS = {"type", "top", "left", "size", "color", "weight", "tracking", "t
 ACTIONS = ("replay", "nothing", "advance", "restart")
 FLOW_VERBS = ("advance", "restart")
 LAND_MODES = ("object", "glyph")
-LAND_KEYS = {"mode", "face", "fit", "after", "delay"}
-STEP_KEYS = {"id", "icon", "overlap", "copy", "timeline", "exit", "on", "end"}
+LAND_KEYS = {"mode", "face", "fit", "after", "delay", "fade"}
+STEP_KEYS = {"id", "icon", "overlap", "copy", "timeline", "exit", "on", "end", "rest"}
+# `rest:` (spring-back after a drag) and `hit:` (the grab zone) are runtime
+# behaviour, not choreography, so they are top-level and step-overridable.
+REST_KEYS = {"spring", "dur", "ease"}
+HIT_KEYS = {"padding"}
 EASE_NAME = re.compile(
     r"^(linear|none|in|out|inOut|outIn|(in|out|inOut|outIn)"
     r"(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$"
 )
 CUBIC_BEZIER = re.compile(r"^cubic-bezier\(\s*[-+\d.]+\s*(,\s*[-+\d.]+\s*){3}\)$")
 AT_EXPR = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*(?:([+-])\s*([\d.]+))?\s*$")
-TOP_KEYS = ("version", "ease", "requires", "resume", "stage", "initial", "steps")
+TOP_KEYS = ("version", "ease", "requires", "resume", "hit", "rest", "stage", "initial", "steps")
 
 
 def _is_num(v):
@@ -338,6 +342,39 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
                 if k not in ("minutes", "id"):
                     warn(f'resume: unknown key "{k}" (ignored)')
 
+    # -- hit: the pointer grab zone
+    hit = doc.get("hit")
+    if hit is not None:
+        if not isinstance(hit, dict):
+            err('"hit" must be a mapping such as { padding: 0.25 }')
+        else:
+            if "padding" in hit and not (_is_num(hit["padding"]) and hit["padding"] >= 0):
+                err("hit.padding must be a number >= 0 (a fraction of the icon's projected radius)")
+            for k in hit:
+                if k not in HIT_KEYS:
+                    warn(f'hit: unknown key "{k}" (ignored)')
+
+    # -- rest: spring-back after a drag (top level; a step may override it)
+    def check_rest(decl, where):
+        if decl is None:
+            return
+        if not isinstance(decl, dict):
+            err(f"{where} must be a mapping such as {{ spring: true, dur: 0.8, ease: outBack }}")
+            return
+        if "spring" in decl and not isinstance(decl["spring"], bool):
+            err(f"{where}.spring must be true or false")
+        if "dur" in decl and not (_is_num(decl["dur"]) and decl["dur"] >= 0):
+            err(f"{where}.dur must be a number of seconds >= 0")
+        if "ease" in decl:
+            e = str(decl["ease"])
+            if not (EASE_NAME.match(e) or CUBIC_BEZIER.match(e)):
+                err(f'{where}.ease: unknown ease "{e}"')
+        for k in decl:
+            if k not in REST_KEYS:
+                warn(f'{where}: unknown key "{k}" (ignored)')
+
+    check_rest(doc.get("rest"), "rest")
+
     # -- steps
     steps = doc.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -441,6 +478,9 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
                         err(f"{where}.land.after: only an object landing can be swapped to a glyph afterwards")
                 if "delay" in land and not (_is_num(land["delay"]) and land["delay"] >= 0):
                     err(f"{where}.land.delay must be a number of seconds >= 0")
+                if "fade" in land and not (_is_num(land["fade"]) and land["fade"] >= 0):
+                    err(f"{where}.land.fade must be a number of seconds >= 0 "
+                        "(the object -> glyph cross-fade; 0 = a hard swap)")
                 for k in land:
                     if k not in LAND_KEYS:
                         warn(f'{where}.land: unknown key "{k}" (ignored)')
@@ -471,6 +511,7 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
             err(f'{where_s}.icon "{step["icon"]}" is not a listed icon')
         if "overlap" in step and not (_is_num(step["overlap"]) and step["overlap"] >= 0):
             err(f"{where_s}.overlap must be a number of seconds >= 0")
+        check_rest(step.get("rest"), f"{where_s}.rest")
         if "exit" in step and not flow:
             warn(f"{where_s}.exit is only played when a step is LEFT, which needs a flow "
                  "(an `on:` using advance/restart)")

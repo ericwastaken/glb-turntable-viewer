@@ -52,6 +52,9 @@
   }
   #fg .fg-slot.is-next   { border-color: var(--slot-on); box-shadow: 0 0 .5em color-mix(in srgb, var(--slot-on) 55%, transparent); }
   #fg .fg-slot.is-filled { border-color: var(--slot-on); }
+  /* 76% is not decorative: the glyph is CAPTURED through the same box (see
+     GLYPH_BOX in the sequence host) so the PNG and the live 3D object are the
+     same size and the same projection at ring size. Change one, change both. */
   #fg .fg-slot .fg-glyph { width: 76%; height: 76%; object-fit: contain; display: block; }
   /* An author rule beats the UA's [hidden] rule, so say it here too — without
      this an emptied ring shows a broken-image icon instead of nothing. */
@@ -599,6 +602,50 @@ function detachPointer() {
   controls.enableRotate = true;
 }
 
+// While a SEQUENCE is live, one router owns the canvas instead of the active
+// icon's own pointer handlers. It is the only place that can decide where a
+// press landed, because only the sequence knows which icons are on screen —
+// the big one AND the ones already sitting in rings. The router hit-tests on
+// pointerdown and the runtime forwards the drag to that icon alone (AGENT.md
+// §12.12). Camera ROTATION is off while it is attached; zoom is not, because
+// pinch/wheel zoom is deliberately available in pack mode.
+let dragListeners = null;
+function attachIconDrag(router) {
+  detachPointer();
+  detachIconDrag();
+  controls.enableRotate = false;
+  const el = renderer.domElement;
+  let active = null;                    // the pointerId that owns the drag
+  const down = e => {
+    if (e.button !== undefined && e.button !== 0) return;
+    // A second finger means a pinch: give the gesture up rather than fight
+    // OrbitControls for it.
+    if (active !== null) { router.up(); active = null; return; }
+    if (!router.down(e.clientX, e.clientY)) return;
+    active = e.pointerId;
+    // Synthetic pointers (a test harness) have no capture to take, and the
+    // call throws rather than no-opping.
+    try { el.setPointerCapture?.(e.pointerId); } catch { /* not a real pointer */ }
+  };
+  const move = e => { if (active === e.pointerId) router.move(e.clientX, e.clientY); };
+  const up = e => { if (active !== null && active === e.pointerId) { router.up(); active = null; } };
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  dragListeners = { down, move, up };
+}
+function detachIconDrag() {
+  if (!dragListeners) return;
+  const el = renderer.domElement;
+  el.removeEventListener('pointerdown', dragListeners.down);
+  el.removeEventListener('pointermove', dragListeners.move);
+  el.removeEventListener('pointerup', dragListeners.up);
+  el.removeEventListener('pointercancel', dragListeners.up);
+  dragListeners = null;
+  controls.enableRotate = true;
+}
+
 function unloadComponent(reloadModel = false, keepBackground = false) {
   if (!component) return;
   stopSequence();
@@ -608,6 +655,7 @@ function unloadComponent(reloadModel = false, keepBackground = false) {
     current.traverse(o => { if (o.isMesh && originalMats.has(o)) o.material = originalMats.get(o); });
   }
   detachPointer();
+  detachIconDrag();
   component = null;
   if (!keepBackground) { componentBg = null; applyBackground(); }
   $('compChip').style.display = 'none';
@@ -665,6 +713,11 @@ const seqWrap = $('seqWrap'), seqScrub = $('seqScrub'), seqPlay = $('seqPlay'), 
 // Everything three.js the sequence needs lives here; sequence.js owns time,
 // DOM and state and never imports three.
 const GLYPH_PX = 256;
+// The fraction of a ring's INNER box the glyph <img> occupies — it must match
+// the `#fg .fg-slot .fg-glyph` width in the CSS above, because the glyph is
+// captured through exactly that box so the PNG and the live object are the
+// same silhouette at ring size.
+const GLYPH_BOX = 0.76;
 let glyphTarget = null;
 
 function makeSequenceHost(comp) {
@@ -675,15 +728,27 @@ function makeSequenceHost(comp) {
   pivot.add(landedGroup);
 
   function setActive(h) {
-    // `component.api` IS the active icon: the render loop, the pointer routing
-    // and unload all read it, so a flow swaps it rather than shadowing it.
+    // `component.api` IS the active icon: the render loop, the status line and
+    // unload all read it, so a flow swaps it rather than shadowing it. The
+    // NAME goes with it — without that the status line kept announcing the
+    // icon the page loaded while a completely different one was on screen.
     if (!component) return;
-    detachPointer();
     if (!h) { component.frozen = true; return; }
     component.api = h.api;
     component.root = h.wrapper;
+    component.name = h.name;
     component.frozen = false;
-    if (h.api.pointer) attachPointer(h.api.pointer);
+    $('compName').textContent = h.name;
+    // The dropdown names the icon on screen too. Assigning `value` does not
+    // fire `change`, so this labels the swap without re-loading the icon.
+    if (zipState) {
+      const val = 'zipicon:' + h.name;
+      if (modelSelect.value !== val && [...modelSelect.options].some(o => o.value === val)) modelSelect.value = val;
+    }
+    refreshStatus();
+    // Pointer input is NOT attached per icon here. While a sequence is live
+    // one hit-testing router owns the canvas (attachIconDrag above) and
+    // forwards each drag to whichever icon it actually landed on.
   }
 
   function setFrozen(h, on) {
@@ -692,14 +757,62 @@ function makeSequenceHost(comp) {
     // attach() preserves the world transform; both parents are identity, so
     // this is a bookkeeping move, not a visual one.
     (on ? landedGroup : pivot).attach(h.wrapper);
-    // Safe only now: nothing is updating this icon any more.
-    if (on) h.api.object.rotation.y = 0;
+    // An icon's visible radius is measured from its meshes AND its own current
+    // scale (an icon may breathe), so re-measure at the instant it stops being
+    // updated: that is the size it is going to keep.
+    radii.delete(h);
+    // NOTHING is written to rotation here any more. The landing tweens the
+    // icon to its rest orientation across the whole flight (§12.6), so it
+    // arrives already facing front; the assignment that used to live here was
+    // a single-frame snap of up to 180 degrees.
   }
 
   function rest(h) {
     setFrozen(h, false);
     h.wrapper.position.set(0, 0, 0);
     h.wrapper.scale.setScalar(1);
+    h.wrapper.rotation.set(0, 0, 0);   // the drag offset the runtime parks here
+    radii.delete(h);
+  }
+
+  // --- measuring the 2D destinations ---------------------------------------------
+  // A ring is a DOM element fixed to the VIEWPORT; a landed icon is in the 3D
+  // world. Anything that changes the projection — a wheel or pinch zoom, a
+  // window resize, a phone rotating — moves one and not the other, so the
+  // world position is re-solved from the ring's CURRENT rect every frame
+  // rather than measured once at landing (which drifted the object clean out
+  // of its ring on the first zoom: measured [0, -67] px).
+  //
+  // Cost control: one getBoundingClientRect per element per FRAME (cleared by
+  // beginFrame, so repeated reads inside a frame are free), and the expensive
+  // getComputedStyle border read only when the rect's size actually changes.
+  const rects = new Map();     // el -> { rect, innerPx }, this frame only
+  const borders = new Map();   // el -> { w, h, border }, until the size changes
+  const radii = new Map();     // handle -> visible radius in wrapper-local units
+  const _va = new THREE.Vector3(), _vb = new THREE.Vector3(), _vc = new THREE.Vector3();
+
+  function beginFrame() { rects.clear(); }
+
+  function measure(el) {
+    let m = rects.get(el);
+    if (m) return m;
+    const rect = el.getBoundingClientRect();
+    let b = borders.get(el);
+    if (!b || b.w !== rect.width || b.h !== rect.height) {
+      const cs = getComputedStyle(el);
+      b = { w: rect.width, h: rect.height,
+            border: (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0) };
+      borders.set(el, b);
+    }
+    m = { rect, innerPx: Math.max(1, Math.min(rect.width, rect.height) - b.border) };
+    rects.set(el, m);
+    return m;
+  }
+
+  function iconRadiusOf(h) {
+    let r = radii.get(h);
+    if (r === undefined) { r = iconRadius(h.wrapper); radii.set(h, r); }
+    return r;
   }
 
   // The icon's visible radius about its wrapper's own origin, in wrapper-local
@@ -731,57 +844,118 @@ function makeSequenceHost(comp) {
   // Where a 2D element's centre is in the icon's own depth plane, and how much
   // to shrink so the icon's visible extent fits inside the target's inner
   // circle. A straight line at constant depth, because both ends are on the
-  // same plane.
+  // same plane. `depth` is a distance IN FRONT OF THE CAMERA, fixed once per
+  // landing: hold that and the icon rides along with a zoom exactly as the
+  // DOM ring does, instead of sliding out of it.
+  function anchorWorld(h, el, fit, depth) {
+    const { rect, innerPx } = measure(el);
+    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+    const fwd = camera.getWorldDirection(_va);
+    const ndc = _vb.set(((rect.left + rect.width / 2) / vw) * 2 - 1,
+                        -((rect.top + rect.height / 2) / vh) * 2 + 1, 0.5).unproject(camera);
+    const dir = ndc.sub(camera.position).normalize();
+    const world = _vc.copy(camera.position).addScaledVector(dir, depth / Math.max(1e-6, dir.dot(fwd)));
+    // The fit is re-derived too, so a ring that changes size (a resize, or a
+    // phone turning: `size` is a vmin fraction) keeps the authored ratio.
+    const pxPerWorld = vh / (2 * depth * Math.tan((camera.fov * Math.PI / 180) / 2));
+    const s = (innerPx * fit) / (2 * iconRadiusOf(h) * pxPerWorld);
+    return { world, s, innerPx, rect };
+  }
+
+  // The same thing in the wrapper's own parent space — what the runtime writes.
+  function anchor(h, el, fit, depth) {
+    const a = anchorWorld(h, el, fit, depth);
+    const local = (h.wrapper.parent ?? pivot).worldToLocal(a.world.clone());
+    return { x: local.x, y: local.y, z: local.z, s: a.s };
+  }
+
   function planMove(h, el, fit) {
     const w = h.wrapper;
     const from = { x: w.position.x, y: w.position.y, z: w.position.z, s: w.scale.x };
-    const radius = iconRadius(w);
-
     const start = w.getWorldPosition(new THREE.Vector3());
     const fwd = camera.getWorldDirection(new THREE.Vector3());
-    const depth = Math.max(1e-4, start.clone().sub(camera.position).dot(fwd));
-    const r = el.getBoundingClientRect();
-    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
-    const ndc = new THREE.Vector3(
-      ((r.left + r.width / 2) / vw) * 2 - 1,
-      -((r.top + r.height / 2) / vh) * 2 + 1, 0.5).unproject(camera);
-    const dir = ndc.sub(camera.position).normalize();
-    const world = camera.position.clone().addScaledVector(dir, depth / Math.max(1e-6, dir.dot(fwd)));
-    const local = w.parent.worldToLocal(world);
+    const depth = Math.max(1e-4, start.sub(camera.position).dot(fwd));
+    return { from, depth, to: anchor(h, el, fit, depth) };
+  }
 
-    // Inner diameter of the ring, in CSS pixels, minus its border.
-    const cs = getComputedStyle(el);
-    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
-    const innerPx = Math.max(1, Math.min(r.width, r.height) - border);
-    const pxPerWorld = vh / (2 * depth * Math.tan((camera.fov * Math.PI / 180) / 2));
-    const s = (innerPx * fit) / (2 * radius * pxPerWorld);
-    return { from, to: { x: local.x, y: local.y, z: local.z, s } };
+  // Which icon did a press land on? Every candidate is projected to screen
+  // along with its own visible radius; the grab zone is that radius plus
+  // `padding` of it, and the nearest hit wins. Nothing near enough wins
+  // nothing — a drag on empty canvas must rotate nothing at all.
+  function hitTest(list, x, y, padding) {
+    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+    const fwd = camera.getWorldDirection(_va);
+    const halfFov = Math.tan((camera.fov * Math.PI / 180) / 2);
+    let best = null, bestD = Infinity;
+    for (const h of list) {
+      const w = h.wrapper;
+      const world = w.getWorldPosition(_vb);
+      const depth = _vc.copy(world).sub(camera.position).dot(fwd);
+      if (depth <= 1e-4) continue;                       // behind the camera
+      const p = world.project(camera);                   // world is a scratch vector
+      const sx = (p.x * 0.5 + 0.5) * vw, sy = (-p.y * 0.5 + 0.5) * vh;
+      const rPx = iconRadiusOf(h) * w.scale.x * (vh / (2 * depth * halfFov)) * (1 + padding);
+      const d = Math.hypot(x - sx, y - sy);
+      if (d <= rPx && d < bestD) { best = h; bestD = d; }
+    }
+    return best;
   }
 
   // A slot's glyph. Provided wins: `glyphs:` in icons.yml reaches us as
   // api.glyph. Otherwise it is DERIVED — rendered once, offscreen, at the
-  // icon's front orientation, so every mark is framed the same way and none of
+  // icon's rest orientation, so every mark is framed the same way and none of
   // them depends on where the icon happened to be rotated when it was
   // collected. Captured at preload for exactly that reason.
-  function glyphFor(h) {
+  //
+  // `dest` is { el, fit } — the ring this icon is going to land in. With it,
+  // the capture uses the MAIN camera cropped (setViewOffset) to the glyph
+  // box inside that ring, with the object placed exactly where and at exactly
+  // the size the landed object will be: the PNG is then the same projection,
+  // the same framing and the same silhouette as the live object it replaces,
+  // so the cross-fade between them has nothing to give away. Without a `dest`
+  // (an icon no step lands) it falls back to a bounding-sphere frame.
+  function glyphFor(h, dest) {
     if (typeof h.api.glyph === 'string' && h.api.glyph) return h.api.glyph;
     const obj = h.api.object;
-    const parent = obj.parent, ry = obj.rotation.y, wasVisible = obj.visible;
+    const parent = obj.parent, rot = obj.rotation.clone(), wasVisible = obj.visible;
     const gs = new THREE.Scene();
     gs.environment = scene.environment;
     const light = new THREE.DirectionalLight(0xffffff, 1.2);
-    light.position.set(3, 5, 4);
+    light.position.copy(key.position);          // the page's own key light
     gs.add(light);
+    const holder = new THREE.Group();           // stands in for the icon's wrapper
+    gs.add(holder);
     let url = null;
     try {
-      obj.rotation.y = 0;              // front
+      // The orientation a landing now ARRIVES at, so the mark and the object
+      // it replaces are the same view of the same thing.
+      obj.rotation.set(0, 0, 0);
       obj.visible = true;
-      gs.add(obj);                     // temporarily; restored in `finally`
-      const sphere = new THREE.Box3().setFromObject(obj).getBoundingSphere(new THREE.Sphere());
-      const cam = new THREE.PerspectiveCamera(40, 1, 0.01, 1000);
-      const dist = (sphere.radius || 1) / Math.tan((40 * Math.PI / 180) / 2) * 1.08;   // a little air
-      cam.position.set(sphere.center.x, sphere.center.y, sphere.center.z + dist);
-      cam.lookAt(sphere.center);
+      let cam;
+      if (dest) {
+        beginFrame();                           // fresh rects for this capture
+        const w = h.wrapper;
+        const start = w.getWorldPosition(new THREE.Vector3());
+        const fwd = camera.getWorldDirection(new THREE.Vector3());
+        const depth = Math.max(1e-4, start.sub(camera.position).dot(fwd));
+        const a = anchorWorld(h, dest.el, dest.fit, depth);
+        holder.position.copy(a.world);
+        holder.scale.setScalar(a.s);
+        holder.add(obj);                        // temporarily; restored in `finally`
+        const boxPx = a.innerPx * GLYPH_BOX;    // the <img>'s box inside the ring
+        cam = camera.clone();
+        cam.setViewOffset(Math.max(1, innerWidth), Math.max(1, innerHeight),
+          a.rect.left + a.rect.width / 2 - boxPx / 2,
+          a.rect.top + a.rect.height / 2 - boxPx / 2, boxPx, boxPx);
+        cam.updateProjectionMatrix();
+      } else {
+        holder.add(obj);
+        const sphere = new THREE.Box3().setFromObject(obj).getBoundingSphere(new THREE.Sphere());
+        cam = new THREE.PerspectiveCamera(40, 1, 0.01, 1000);
+        const dist = (sphere.radius || 1) / Math.tan((40 * Math.PI / 180) / 2) * 1.08;   // a little air
+        cam.position.set(sphere.center.x, sphere.center.y, sphere.center.z + dist);
+        cam.lookAt(sphere.center);
+      }
       if (!glyphTarget) {
         glyphTarget = new THREE.WebGLRenderTarget(GLYPH_PX, GLYPH_PX);
         // Without this the readback is linear-light and the mark comes out
@@ -811,7 +985,7 @@ function makeSequenceHost(comp) {
       console.warn('[sequence] could not derive a glyph for', h.name, err);
     } finally {
       (parent ?? h.wrapper).add(obj);
-      obj.rotation.y = ry;
+      obj.rotation.copy(rot);
       obj.visible = wasVisible;
       light.dispose();
     }
@@ -833,7 +1007,8 @@ function makeSequenceHost(comp) {
       handles.set(name, h);
       return h;
     },
-    setActive, setFrozen, rest, planMove, glyphFor,
+    setActive, setFrozen, rest, planMove, anchor, hitTest, glyphFor, beginFrame,
+    attachDrag: attachIconDrag, detachDrag: detachIconDrag,
     dispose() {
       // Everything this host built is released here; the icon the page loaded
       // is handed back to unloadComponent() exactly as it found it.
@@ -843,12 +1018,17 @@ function makeSequenceHost(comp) {
         h.wrapper.parent?.remove(h.wrapper);
       }
       handles.clear();
+      rects.clear(); borders.clear(); radii.clear();
       pivot.attach(first.wrapper);
       pivot.remove(landedGroup);
+      detachIconDrag();
       if (component) {
         component.api = first.api; component.root = first.wrapper; component.frozen = false;
+        component.name = first.name;
+        $('compName').textContent = first.name;
         detachPointer();
         if (first.api.pointer) attachPointer(first.api.pointer);
+        refreshStatus();
       }
     },
   };
@@ -872,6 +1052,7 @@ async function startSequence(comp) {
   if (!seq) root0.visible = true;
   comp.seq = seq;
   syncSequenceUI();
+  refreshStatus();   // a live sequence changes what a drag does (§12.12)
 }
 
 function stopSequence() {
@@ -1138,7 +1319,9 @@ function refreshStatus() {
     ? (zipState ? ` • ${zipState.source} ${zipState.label}` : ` • component ${component.name} (${component.kind})`)
     : '';
   const shown = component?.kind === 'object' ? component.name : baseLabel;
-  const drag = component?.api.pointer ? 'drag to spin the icon' : 'drag to orbit';
+  // A sequence routes drags to whichever icon was actually grabbed, so an
+  // icon with no pointer handlers of its own is draggable too (AGENT.md §12.12).
+  const drag = (component?.seq || component?.api.pointer) ? 'drag to spin the icon' : 'drag to orbit';
   status.textContent = `${shown} • ${drag}, wheel/pinch to zoom` + comp +
     (animCount ? ` • ${animCount} embedded animation${animCount > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
@@ -1294,7 +1477,10 @@ renderer.setAnimationLoop(() => {
   // the sequence advances the wrapper/overlay. They never share a property.
   const seq = component?.seq;
   if (seq) {
-    if (seq.playing) seq.update(dt);
+    // ALWAYS, not only while playing: a held phase still has to re-anchor its
+    // landed objects to their rings (the camera and the viewport can change
+    // under a finished sequence) and still has to settle a spring-back.
+    seq.update(dt);
     // Keep the transport honest after a programmatic seek() too (e.g. from the
     // console); only touch the DOM when something actually changed.
     if (seq.time !== seqUi.time || seq.playing !== seqUi.playing || seq.duration !== seqUi.duration) syncSequenceUI();
