@@ -286,6 +286,11 @@ is loaded the turntable spin, pivot, and sidecar controls hide — the pack owns
 its own motion, materials, and framing. Loading any other model or a new zip
 also exits the pack.
 
+Add **`?dev=1`** while you are authoring: it re-fetches the sequence runtime on
+every load and ignores a pack's saved `resume:` step, so a reload always shows
+your latest edit from the beginning. (A pack's `icons.yml` and `sequence.yml`
+are never cached, dev mode or not.)
+
 Add **`?ui=0`** to hide every viewer control — picker, buttons, sequence
 transport, status line, links — so the page shows only what the pack draws.
 Handy for showing a pack as the page it is meant to be, and for screenshots.

@@ -118,12 +118,18 @@ async function buildIcon(ctx, name, background, sequence, glyph) {
 // is a superset of JSON, so renaming the file is normally the whole migration.
 // 'js-yaml' resolves through the page's import map exactly like 'three' does,
 // and is only imported when a YAML manifest is actually present.
+// The manifest and the sequence are small and are edited constantly while a
+// pack is being authored. Caching them saves nothing measurable and costs an
+// author a stale read that looks like a broken edit, so they are never cached.
+// (The icon modules and their assets ARE cached — those are megabytes.)
+const NO_STORE = { cache: 'no-store' };
+
 const EXAMPLE = 'It should contain e.g.\n\nicons:\n  - myicon';
 
 async function readManifest() {
   const ymlUrl = new URL('./icons.yml', import.meta.url);
   let res;
-  try { res = await fetch(ymlUrl); }
+  try { res = await fetch(ymlUrl, NO_STORE); }
   catch (err) { throw new Error(`Could not fetch icons.yml next to component.js (${err.message}).`); }
   if (res.ok) {
     const { load } = await import('js-yaml');
@@ -136,7 +142,7 @@ async function readManifest() {
 
   const jsonUrl = new URL('./icons.json', import.meta.url);
   let legacy;
-  try { legacy = await fetch(jsonUrl); } catch { legacy = null; }
+  try { legacy = await fetch(jsonUrl, NO_STORE); } catch { legacy = null; }
   if (legacy && legacy.ok) {
     console.warn('[pack] icons.json is deprecated and will be unsupported in a future version. Rename it to icons.yml (the same keys work; YAML is a superset of JSON).');
     let manifest;
@@ -158,7 +164,7 @@ async function readSequence(manifest, file) {
   if (typeof rel !== 'string' || !rel.trim()) throw new Error(`${file}: "sequence" must be a relative path such as sequence.yml`);
   const url = new URL(rel, import.meta.url);
   let res;
-  try { res = await fetch(url); }
+  try { res = await fetch(url, NO_STORE); }
   catch (err) { throw new Error(`Could not fetch ${rel} named by ${file} (${err.message}).`); }
   if (!res.ok) throw new Error(`Could not read ${rel} named by ${file} (HTTP ${res.status}).`);
   const { load } = await import('js-yaml');

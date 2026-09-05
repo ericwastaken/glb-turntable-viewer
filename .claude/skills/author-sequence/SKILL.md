@@ -164,6 +164,12 @@ Checklist for a flow:
     MOVES, so the tap target is stable even though it fades. Assert opacity
     reaches 0 during the transition and 1 again after the next step settles,
     with the rect unchanged throughout.
+- **Author with `?dev=1`.** It re-fetches the sequence runtime on every load and
+  ignores the pack's saved `resume:` step, so a reload shows your latest edit
+  from the start rather than yesterday's module resuming into step 3. Your
+  `sequence.yml` and `icons.yml` are never cached either way. If you are editing
+  the VIEWER rather than a pack, serve it with the `viewer-dev` launch config —
+  only a no-store server reaches `index.html` and `vendor/`.
 - **`start: reset` is the default, and you usually want it.** An icon's
   controller accumulates yaw for the life of the pack and assigns rotation every
   frame, so `start: continue` means an icon shown a second time snaps back on its

@@ -64,6 +64,20 @@ python3 -m http.server 8000     # then open http://localhost:8000
 tooling that reads launch configs. If your harness's launch.json lives
 elsewhere, just run the command above.
 
+**When you are editing the viewer itself, serve it no-store instead.** The
+browser caches `sequence.js` and the vendored modules hard, and a real fix that
+appears to do nothing is almost always a cached module rather than a bad edit
+(§10). `.claude/launch.json` declares `viewer-dev` on port 8001 for this — the
+same static server plus `Cache-Control: no-store` on every response:
+
+```bash
+python3 -c "import http.server as h;C=h.SimpleHTTPRequestHandler;C.end_headers=(lambda s,_o=C.end_headers:(s.send_header('Cache-Control','no-store, max-age=0'),_o(s)) and None);h.test(HandlerClass=C,port=8001)"
+```
+
+This is the only thing that reaches `index.html` and `vendor/`. The `?dev=1`
+parameter (§4) covers everything loaded after boot and is enough for authoring a
+pack; reach for the server when you are changing the app.
+
 Everything your component or pack loads must be **under the folder you serve**,
 because components and backgrounds are same-origin only (§4).
 
@@ -71,7 +85,7 @@ because components and backgrounds are same-origin only (§4).
 
 ## 4. URL parameters
 
-Six, all read once at boot from `location.search`. There is no parameter that
+Seven, all read once at boot from `location.search`. There is no parameter that
 loads a zip — a zip arrives only by drop or the file picker (§7).
 
 | Parameter | Accepts | Example | Constraints / notes |
@@ -81,6 +95,7 @@ loads a zip — a zip arrives only by drop or the file picker (§7).
 | `?component=` | Relative path to an ES module | `?component=./components/example-shader-orb.js` | **Same-origin only** — `loadComponentURL()` rejects any other origin outright with a status-line message. Loaded **after** the model finishes loading, so `?model=…&component=…` works for a `{ material }` component. |
 | `?bg=` | Relative path to an image | `?bg=backgrounds/starfield-default.jpg` | **Same-origin only** — a cross-origin value is refused and the default backdrop stays. A component's or pack's own background overrides this while loaded. |
 | `?ui=` | `0` (also `none` / `off` / `false` / `hide`) | `?ui=0` | **Bare mode**: hides every viewer control — the picker, the buttons, the sequence transport, the status line, the drop hint, the links — leaving only the background layer, the canvas and a sequence's overlay. The elements stay in the DOM with their values intact, so anything reading `#speed`, `#modelSelect` or the transport still works; drag, zoom and taps are unaffected. Use it to show a pack as the page it is meant to be, and for clean screenshots and recordings. Any other value keeps the full UI. |
+| `?dev=` | `1` (or any value except `0`/`off`/`false`/`no`); `all` widens it | `?dev=1` | **Author mode.** Re-fetches `sequence.js` on every load (a token on the dynamic import — `import()` takes no cache option), **ignores a pack's saved `resume:` step** without deleting it, and shows a DEV badge. `?dev=all` also re-fetches the pack loader and every icon module, which re-downloads the whole pack each reload. **It cannot reach `index.html` or the vendored modules** — those are fetched before any of this code runs, and are `import`ed statically through the import map. For those, serve with the `viewer-dev` launch config (§3), which sends `Cache-Control: no-store`. A pack's `icons.yml` and `sequence.yml` are ALWAYS fetched `no-store`, dev mode or not: they are a few KB and are edited constantly. |
 | `?pivot=` | Exactly three comma-separated finite numbers, `x,y,z`, in model units | `?pivot=0,0.5,0` | Forces the spin axis, overriding the Pivot dropdown. The model is positioned at the negation of this vector. Anything that is not three finite numbers (`?pivot=0,0.5`, `?pivot=a,b,c`) is **silently ignored** and the dropdown's mode applies. |
 
 All five combine. Verified together against a live server:
@@ -374,6 +389,13 @@ Loader behaviour worth knowing (all in `buildIcon()`):
   `icon.update(dt, controller)`. With no controller it calls `icon.update(dt)`.
   So an icon's `update` signature is `(dt, controller?)`.
 - `dispose()` on your returned object is called on unload.
+- The loader also exposes **`resetMotion()`** on the icon it returns, and a
+  sequence's `start: reset` (§12) calls it at every step entrance. It REPLACES
+  your `IconController` rather than writing a rotation, because a controller
+  assigns rotation every frame and would overwrite anything written to the
+  object on the very next one — that also clears yaw, pitch, both velocities and
+  the sparkle phase together. **An icon module needs to do nothing to get this**;
+  it works through the exports you already provide.
 - If your returned object has **`setFade(v)`** (0–1), the loader forwards it as
   `api.setFade` so a sequence can fade the icon through your own material
   (the only route for a raw `ShaderMaterial`). Standard-material icons need

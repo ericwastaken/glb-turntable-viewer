@@ -550,7 +550,10 @@ export function createSequence(doc, host) {
   // A saved state is thrown away — never repaired — when the pack has moved on:
   // editing sequence.yml must not strand a visitor on a step that is gone.
   if (storeKey) {
-    const saved = readSaved(storeKey);
+    // ?dev=1 ignores a saved step. Resuming into step 3 while you are editing
+    // step 1 is the same class of problem as a cached module: the page is
+    // showing you yesterday's answer.
+    const saved = host.dev ? null : readSaved(storeKey);
     const ids = steps.map(stepId);
     const fresh = saved
       && saved.v === STORE_VERSION

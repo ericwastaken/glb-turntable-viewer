@@ -292,6 +292,32 @@ document.getElementById('modelSelect').onchange();
 // #speed is back to its old value, and body.zipmode is gone
 ```
 
+## 5b. Assert the runtime is FRESH before you trust any measurement
+
+The browser caches `sequence.js` hard, and a stale module produces measurements
+that look like a real result. This has produced a false "the fix works" AND a
+false "the fix does nothing" in the same session. One line, before anything else:
+
+```js
+viewer.sequence.start;                    // a string = fresh · undefined = STALE
+typeof viewer.component.api.resetMotion;  // "function" = fresh · "undefined" = STALE
+```
+
+If either is stale, the measurement that follows is worthless. Fix it by loading
+with `?dev=1` (re-fetches the runtime every time and ignores the saved step), or
+serve the whole app no-store with the `viewer-dev` launch config — that is the
+only thing that also reaches `index.html` and `vendor/`.
+
+Two related traps in the same family:
+
+- **A pack carries its OWN COPY of the stock loader.** Changing
+  `components/pack.component.js` does nothing for a pack until you copy it in
+  again; `api.resetMotion` coming back `undefined` is the usual symptom.
+- **`resume:` will restore a step you did not ask for.** A page that loads
+  straight into step 3 while you are editing step 1 is not a bug. `?dev=1`
+  ignores saved state; `localStorage.clear()` removes it. Clear it BEFORE the
+  page loads, not after — the read happens at boot.
+
 ## 6. Always read the status line and the console
 
 Almost nothing in this app throws to the user. Bad component, invalid sidecar,

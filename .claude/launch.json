@@ -4,8 +4,21 @@
     {
       "name": "viewer",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8000"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8000"
+      ],
       "port": 8000
+    },
+    {
+      "name": "viewer-dev",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-c",
+        "import http.server as h,functools;C=h.SimpleHTTPRequestHandler;C.end_headers=(lambda s,_o=C.end_headers:(s.send_header('Cache-Control','no-store, max-age=0'),_o(s)) and None);h.test(HandlerClass=C,port=8001)"
+      ],
+      "port": 8001
     }
   ]
 }

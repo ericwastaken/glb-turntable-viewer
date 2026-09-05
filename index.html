@@ -172,6 +172,19 @@ body.bare #hud,
 body.bare #status,
 body.bare #drop,
 body.bare #editor { display: none !important; }
+
+/* --- dev mode (?dev=1) ------------------------------------------------------
+   A corner badge, deliberately loud. The whole point of dev mode is that you
+   know which rules you are running under; a silent flag would be worse than no
+   flag. Survives bare mode, because that is exactly when you cannot otherwise
+   tell. */
+body.devmode::after {
+  content: "DEV";
+  position: fixed; right: 8px; bottom: 8px; z-index: 999;
+  font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .12em; padding: 4px 6px; border-radius: 3px;
+  color: #0b1020; background: #ffd166; pointer-events: none;
+}
 </style>
 </head>
 <body>
@@ -335,6 +348,26 @@ const params = new URLSearchParams(location.search);
 // just the pack's own picture. Anything else, or absent, keeps the full UI.
 const UI_OFF = /^(0|none|off|false|hide)$/i;
 if (UI_OFF.test((params.get('ui') || '').trim())) document.body.classList.add('bare');
+
+// ?dev=1 — author mode. It cannot disable caching wholesale: index.html and the
+// statically imported vendor modules are already fetched before any of this
+// runs, and only a no-store SERVER reaches those (see .claude/launch.json's
+// "viewer-dev"). What it does reach is everything loaded after boot, plus the
+// saved resume state — the other thing that quietly serves you yesterday's
+// answer.
+//   ?dev=1     sequence.js always re-fetched; a pack's saved step is ignored
+//   ?dev=all   …and the pack loader and every icon module too. That re-downloads
+//              the whole pack on every reload — megabytes — so it is opt-in.
+const devParam = (params.get('dev') || '').trim().toLowerCase();
+const DEV = devParam !== '' && !/^(0|off|false|no)$/.test(devParam);
+const DEV_ALL = DEV && devParam === 'all';
+// A token, not `cache: 'reload'`: a dynamic import() takes no cache option, and
+// a module is only re-evaluated when its URL itself differs.
+const devBust = () => (DEV ? `?dev=${Date.now()}` : '');
+if (DEV) {
+  document.body.classList.add('devmode');
+  console.info(`[viewer] dev mode${DEV_ALL ? ' (all)' : ''}: sequence runtime uncached, saved step ignored${DEV_ALL ? ', pack modules uncached' : ''}. index.html and vendor/ still come from the browser cache — use the viewer-dev server for those.`);
+}
 const pivotParam = (params.get('pivot') || '').split(',').map(Number);
 const manualPivot = pivotParam.length === 3 && pivotParam.every(Number.isFinite)
   ? new THREE.Vector3(...pivotParam) : null;
@@ -1061,8 +1094,8 @@ async function startSequence(comp) {
   root0.visible = false;   // no flash of the rest pose while the module loads
   let seq = null;
   try {
-    const { createSequence } = await import('./sequence.js');
-    seq = createSequence(api.sequence.doc, makeSequenceHost(comp));
+    const { createSequence } = await import('./sequence.js' + devBust());
+    seq = createSequence(api.sequence.doc, { ...makeSequenceHost(comp), dev: DEV });
   } catch (err) {
     status.textContent = `${api.sequence.file}: ${err.message}`;
     console.error(err);
