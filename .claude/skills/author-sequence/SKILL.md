@@ -64,7 +64,7 @@ stage:                                  # every target a track may name
   overlay:
     line1: { type: text, top: 0.735, size: 0.05, weight: 700, tracking: 0.12 }
     line2: { type: text, top: 0.805, size: 0.05, weight: 700, tracking: 0.12 }
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: true }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: false }
 steps:
   - id: one
     icon: twist
@@ -152,10 +152,18 @@ Two things to carry into every file:
 
 Checklist for a flow:
 
-- **`persist: true` on the call-to-action.** Once it has arrived, every later
-  step skips its tracks — it never hides, never re-animates, never moves.
-  Assert its `getBoundingClientRect()` is identical before the first tap and
-  at the end.
+- **`persist:` picks one of two models for a recurring element.** It is
+  declared ONCE in `stage:`, while its animation usually lives in the shared
+  entrance every step reuses — so this one flag decides which way it behaves:
+  - `persist: true` — arrives once, then every later step skips its tracks. It
+    never hides, never re-animates, never moves. Assert its
+    `getBoundingClientRect()` is identical before the first tap and at the end.
+  - `persist: false` — its tracks play in EVERY step, so it can leave in the
+    exit and return with the next entrance. Put a fade-out in the shared `exit:`
+    and let the existing entrance track bring it back; the element still never
+    MOVES, so the tap target is stable even though it fades. Assert opacity
+    reaches 0 during the transition and 1 again after the next step settles,
+    with the rect unchanged throughout.
 - **`overlap` is the one number to retune in review.** It lives on the
   *incoming* step and says how many seconds its entrance starts BEFORE the
   outgoing exit ends. `0` is strictly sequential.

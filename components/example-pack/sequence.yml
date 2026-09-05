@@ -55,17 +55,17 @@ hit:
 # and still comes back. A step may override the whole block.
 rest:
   spring: true             # default true; false leaves the icon where it was left
-  dur: 0.5                 # seconds — how LONG the return takes
+  dur: 0.8                 # seconds — how LONG the return takes
   # …and how it FEELS on the way. Three ways to write it, softest first:
-  #   outBack(0.4)          barely overshoots, reads as a settle
-  #   outBack(0.9)          the default: a nudge past centre  (bare `outBack`
-  #                         is Anime.js's 1.70158 and is deliberately springy)
+  #   outBack(0.25)         the default: a settle, barely past centre
+  #   outBack(0.9)          a clear nudge past centre
+  #   outBack               Anime.js's bare 1.70158 — deliberately springy
   #   spring(60, 14)        a real spring: peaks at 1.00, no visible bounce
   #   spring(100, 10)       peaks at 1.16
   #   spring(200, 8)        peaks at 1.40 — the loosest thing here
   # Stiffness raises the overshoot, damping kills it. `dur` still owns timing:
   # a spring is used as the CURVE, not as its own clock.
-  ease: outBack(0.9)
+  ease: outBack(0.25)
 
 # --- what this sequence is allowed to touch ------------------------------------
 # Every name used in a track must be declared here. `top`/`left` are viewport
@@ -82,9 +82,13 @@ stage:
   overlay:
     line1: { type: text, top: 0.72, size: 0.05, weight: 700, tracking: 0.10 }
     line2: { type: text, top: 0.79, size: 0.05, weight: 700, tracking: 0.10 }
-    # `persist: true` — once the call-to-action has arrived it is never hidden
-    # and never re-animated, so the tap target does not move under a finger.
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: true }
+    # TWO MODELS, one flag, because the element is declared ONCE here while its
+    # animation lives in the shared entrance below:
+    #   persist: true   arrives once and is then skipped in every later step —
+    #                   never hidden, never re-animated, never moves.
+    #   persist: false  its tracks play in EVERY step, so it can leave on tap
+    #                   and come back with the next one. That is this sequence.
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: false }
 
 # --- state at frame 0 ----------------------------------------------------------
 # Not animation. Slots start empty here; `slot: { filled: 1 }` (a count) or
@@ -156,6 +160,17 @@ steps:
     # `after: glyph` swaps it for the flat mark a beat later, so an author gets
     # the 3D motion without paying for a permanently live shader.
     exit:
+      # The call-to-action leaves the instant it is tapped, faster than the
+      # copy, so the tap reads as "taken". It returns in the next step's
+      # entrance, on the same track that first brought it in.
+      - &cta-out
+        id: cta-out
+        target: cta
+        at: 0
+        timing: { dur: 0.18, ease: *ease-leave }
+        channels:
+          fade:  [1, 0]
+          bloom: [1, 0]
       - &copy-out
         id: copy-out
         target: [line1, line2]
@@ -193,6 +208,7 @@ steps:
       line2: "THE SAME CHOREOGRAPHY"
     timeline: *entrance
     exit:
+      - *cta-out
       - *copy-out
       - id: collect
         target: icon
@@ -216,6 +232,7 @@ steps:
       line2: "THE LAST ONE TO COLLECT"
     timeline: *entrance
     exit:
+      - *cta-out
       - *copy-out
       - id: collect
         target: icon
@@ -231,16 +248,19 @@ steps:
 
   # ---- the end state ---------------------------------------------------------------
   # A flow step with no `icon:` is a state, not an icon: nothing is on the
-  # canvas, there is no copy, and the call-to-action is still exactly where it
-  # has been since step 1. Its zero-length track matters only on a RESUME
-  # straight into this state, when nothing has arrived yet — during a live run
-  # the `persist:` element has already arrived and the track is skipped.
+  # canvas and there is no copy. With `persist: false` the call-to-action left
+  # with the last tap, so it eases back in here on the same gesture it uses
+  # everywhere else — which also covers a RESUME straight into this state.
   - id: done
     timeline:
-      - id: cta-hold
+      - id: cta-in
         target: cta
-        timing: { dur: 0 }
-        channels: { fade: 1, rise: 0, bloom: 1 }
+        at: 0.25
+        timing: { dur: 0.2, ease: *ease-swell }
+        channels:
+          fade:  [0, 1]
+          rise:  [14, 0]
+          bloom: [0, 1]
     on:
       cta.tap: { do: restart }   # empties the rings instantly and replays step 1
     end: hold

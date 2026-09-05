@@ -865,6 +865,14 @@ ease:
 requires:
   icon.fade: { degrade: scale-only }
 
+# A recurring overlay element is declared ONCE in `stage:` while its animation
+# lives in the entrance every step reuses, so `persist:` picks the model:
+#   persist: true    arrives once; later steps skip its tracks. Never hides,
+#                    never re-animates, never moves.
+#   persist: false   its tracks play in EVERY step, so it can leave in `exit:`
+#                    and return with the next entrance. It still never moves —
+#                    only its opacity changes — so the tap target is stable.
+
 # OPT-IN persistence (§12.8). Absent — or `minutes: 0` — means NOTHING is
 # written to the visitor's browser.
 resume:

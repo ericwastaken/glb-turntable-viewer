@@ -71,8 +71,10 @@ const DEFAULT_FIT = 0.72;        // fraction of the target's inner diameter
 const DEFAULT_XFADE = 0.12;      // seconds of object -> glyph cross-fade
 const DEFAULT_PADDING = 0.25;    // grab zone, as a fraction of the projected radius
 // `outBack` unparametrised overshoots by 1.70158, which reads as aggressive on
-// a hand-sized icon. The default is deliberately gentler; authors dial it.
-const REST_DEFAULT = { spring: true, dur: 0.5, ease: 'outBack(0.9)' };
+// a hand-sized icon. The default is deliberately slow and nearly overshoot-free
+// — a settle rather than a bounce. Authors dial both ends: `dur` for speed,
+// the ease's argument for how far past centre it goes.
+const REST_DEFAULT = { spring: true, dur: 0.8, ease: 'outBack(0.25)' };
 const REST_KEYS = ['spring', 'dur', 'ease'];
 // A drag of the viewport's SHORTER side is one full turn, so the gesture feels
 // the same on a phone and on a desktop.
