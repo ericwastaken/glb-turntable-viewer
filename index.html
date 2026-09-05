@@ -1447,7 +1447,12 @@ const seqWrap = $('seqWrap'), seqScrub = $('seqScrub'), seqPlay = $('seqPlay'), 
 // because its own controller reassigns rotation.y every frame (measured).
 // Everything three.js the sequence needs lives here; sequence.js owns time,
 // DOM and state and never imports three.
-const GLYPH_PX = 256;
+// 512, not 256. A ring's glyph box is around 90 CSS px on a phone, which at
+// the DPR 3 those phones report is ~270 device pixels — a 256 px PNG was being
+// upscaled there, and read soft and pale next to the 3D object it replaces. The
+// cost is one 1 MB data URL per icon (a few MB for a whole pack), paid once at
+// preload and again once per landing, which is nothing against a pack's models.
+const GLYPH_PX = 512;
 // The fraction of a ring's INNER box the glyph <img> occupies — it must match
 // the `#fg .fg-slot .fg-glyph` width in the CSS above, because the glyph is
 // captured through exactly that box so the PNG and the live object are the
@@ -1642,10 +1647,8 @@ function makeSequenceHost(comp) {
   }
 
   // A slot's glyph. Provided wins: `glyphs:` in icons.yml reaches us as
-  // api.glyph. Otherwise it is DERIVED — rendered once, offscreen, at the
-  // icon's rest orientation, so every mark is framed the same way and none of
-  // them depends on where the icon happened to be rotated when it was
-  // collected. Captured at preload for exactly that reason.
+  // api.glyph. Otherwise it is DERIVED — rendered offscreen and kept as a PNG
+  // data URL.
   //
   // `dest` is { el, fit } — the ring this icon is going to land in. With it,
   // the capture uses the MAIN camera cropped (setViewOffset) to the glyph
@@ -1654,8 +1657,23 @@ function makeSequenceHost(comp) {
   // the same framing and the same silhouette as the live object it replaces,
   // so the cross-fade between them has nothing to give away. Without a `dest`
   // (an icon no step lands) it falls back to a bounding-sphere frame.
-  function glyphFor(h, dest) {
+  //
+  // `opts.pose` picks WHICH view of the object is photographed, and the two
+  // callers want different things:
+  //   'front'   (default) — `rotation` is zeroed first. This is the PRELOAD
+  //             capture: every mark framed the same way, none of them
+  //             depending on where the icon happened to be rotated.
+  //   'current' — nothing about the object is touched. This is the LAND-time
+  //             capture, taken from the object already frozen in its ring, so
+  //             the PNG carries its exact resting orientation AND whatever
+  //             state its own material is holding — a sparkle sheet frame, a
+  //             dissolve, a pulse. None of that is reachable from here (a
+  //             `setSparklePhase` export is optional and most packs have
+  //             none), and none of it has to be: photograph the object rather
+  //             than try to reproduce it.
+  function glyphFor(h, dest, opts) {
     if (typeof h.api.glyph === 'string' && h.api.glyph) return h.api.glyph;
+    const keepPose = opts?.pose === 'current';
     const obj = h.api.object;
     const parent = obj.parent, rot = obj.rotation.clone(), wasVisible = obj.visible;
     const gs = new THREE.Scene();
@@ -1668,8 +1686,9 @@ function makeSequenceHost(comp) {
     let url = null;
     try {
       // The orientation a landing now ARRIVES at, so the mark and the object
-      // it replaces are the same view of the same thing.
-      obj.rotation.set(0, 0, 0);
+      // it replaces are the same view of the same thing. A 'current' capture
+      // is ALREADY looking at that object, so it must not be disturbed.
+      if (!keepPose) obj.rotation.set(0, 0, 0);
       obj.visible = true;
       let cam;
       if (dest) {

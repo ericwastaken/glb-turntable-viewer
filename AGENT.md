@@ -1532,15 +1532,43 @@ one). Only the ACTIVE icon's `update(dt)` runs.
    Paths are relative to `component.js` and must exist in the pack; the loader
    resolves each to an absolute URL and forwards it as `api.glyph`.
 
-2. **Derived.** With no entry, the viewer renders the icon once to an offscreen
-   256 × 256 render target at its **front** orientation and keeps the result as
-   a PNG data URL. **This happens at PRELOAD, not at land time**, so every mark
-   is framed the same way and none of them depends on where the icon happened
-   to be rotated when it was collected. The icon is forced to `fade: 1` for the
-   capture and put straight back — capture it at a t=0 pose and the mark comes
-   back literally empty (measured: alpha coverage 0.0000).
+2. **Derived.** With no entry, the viewer renders the icon to an offscreen
+   512 × 512 render target and keeps the result as a PNG data URL. The icon is
+   forced to `fade: 1` for the capture and put straight back — capture it at a
+   t=0 pose and the mark comes back literally empty (measured: alpha coverage
+   0.0000).
 
-   The capture uses **the page's own camera**, cropped with `setViewOffset()` to
+   **It is derived twice: once at preload, and again at touchdown.**
+
+   - **At preload**, at the icon's **front** orientation. This is the warm copy:
+     it exists before any flight, so a ring filled by `initial:` or by a resume
+     has a mark straight away, every mark is framed the same way, and none of
+     them depends on where the icon happened to be rotated. It is also the
+     fallback — if the second capture fails for any reason the preloaded mark
+     stands and a landing is never left without a mark.
+   - **At touchdown**, from the object that is about to be replaced, exactly as
+     it is: its resting orientation, and whatever its own material is holding.
+     Nothing is reset for this one. It happens after the object is frozen at
+     rest and before `land.delay` runs out, so the cross-fade has the object on
+     one side and a photograph of that same object on the other.
+
+   The second capture exists because **an icon that animates its surface has
+   moved on by the time it lands**. A sparkle sheet is the usual case: the icon
+   is frozen mid-sheet with glints lit, while a mark baked at preload was baked
+   at sheet frame 0 with different glints — so the cross-fade ran from a
+   sparkling object to a sparkle-free image and the specks visibly blinked out.
+   Measured on a sheet-sparkle icon, the same object at the same pose through
+   the same crop, phase 100.551 against phase 0: **1071 pixels (1.6% of the
+   silhouette) differing by more than 20/255**, max channel difference 68, about
+   half brighter each way — moving specks, not a shading change. The rest of the
+   object was identical. That difference is now zero by construction.
+
+   You do not have to expose anything for this. `setSparklePhase(frames)` is an
+   optional icon export and the viewer never calls it here — it photographs the
+   object rather than trying to reproduce it, so a dissolve, a pulse or a shader
+   that keys off anything at all comes out right without knowing what it is.
+
+   Both captures use **the page's own camera**, cropped with `setViewOffset()` to
    the glyph box inside the ring this icon is going to land in, with the object
    placed at exactly the world position and scale the landed object will have.
    The PNG is therefore the same projection, the same framing and the same
@@ -1552,6 +1580,17 @@ one). Only the ACTIVE icon's `update(dt)` runs.
    same comparison, with the mark 35% too small (alpha coverage 0.20972 against
    the object's 0.32531). An icon that no step lands still falls back to the
    bounding-sphere frame.
+
+   **512 × 512, not 256.** A ring's glyph box lands at roughly 90 CSS px on a
+   phone, which at DPR 3 is around 270 device pixels: a 256 px mark was being
+   upscaled and read soft and pale beside the crisp 3D object it replaces. The
+   cost is about 1 MB of data URL per icon — nothing against a pack's models.
+
+   **A landing that never shows a mark never takes the touchdown capture.**
+   `land.mode: object` with no `after: glyph` leaves the real object in the ring
+   for good, so there is nothing to cross-fade to and nothing is rendered. On
+   the example pack — one `after: glyph` step, one plain `object` step, one
+   `mode: glyph` step — that is two captures for three landings, measured.
 
    A pack needs no new assets for this to work. An icon whose look depends
    heavily on a backdrop (deep transmission, say) may derive a faint mark —
@@ -1607,7 +1646,9 @@ the whole transition is 3.35 s.
 
 **Preloading — deferred.** Every icon in the pack is built once and its glyph
 captured at the same moment, so a tap never stalls on a geometry build.
-`viewer.sequence.ready` is the promise.
+`viewer.sequence.ready` is the promise. That glyph is the warm copy and the
+fallback; the one a ring actually ends up showing is re-taken at touchdown from
+the object it replaces (§12.6).
 
 It runs **after the first draw**, not beside it: the host hands the runtime a
 `deferPreload` promise which the viewer resolves once the curtain is down and a

@@ -1063,6 +1063,53 @@ export function createSequence(doc, host) {
     }
   }
 
+  // RE-CAPTURE the mark at touchdown, from the object that is about to be
+  // replaced by it.
+  //
+  // The preload capture (preload(), below) is the warm path: it exists before
+  // any flight so a ring is never empty, and it stays the fallback if this
+  // fails. But it is taken long beforehand, at the icon's front orientation,
+  // with the icon's own material wherever it happened to be — and an icon that
+  // animates its surface (a sparkle sheet, a shimmer, a pulse) will have moved
+  // on by the time it lands. The cross-fade then runs from a sparkling object
+  // to a sparkle-free image and the specks visibly vanish, which is exactly
+  // what it was built not to do.
+  //
+  // So photograph the object instead of trying to reproduce it. At this point
+  // it is frozen (setFrozen at flight start took it off the update path), it is
+  // at its resting `land.face: front` orientation, it is anchored in its ring,
+  // and its material is holding whatever frame it stopped on. Capturing HERE —
+  // after touchdown, before `releaseAt` starts the cross-fade — makes the two
+  // sides of that fade the same picture by construction rather than by tuning.
+  //
+  // Once per landing (`m.captured`, cleared if a scrub goes back before the
+  // flight). Failure is silent and harmless: the preloaded mark stands.
+  function captureLandedGlyph(m) {
+    if (m.captured || m.releaseAt === null || t < m.touchdown) return;
+    m.captured = true;                    // set FIRST: one attempt, not one per frame
+    const h = m.handle;
+    // Author-supplied art always wins, and there is nothing to re-derive.
+    if (typeof h.api.glyph === 'string' && h.api.glyph) return;
+    // Full opacity for the capture and straight back, exactly as preload does:
+    // an exit track may already be fading the object out, and a mark baked at
+    // half alpha would be permanently dim.
+    const fade = fadeFor(h);
+    let url = null;
+    try {
+      fade?.(1);
+      url = host.glyphFor(h, { el: m.el, fit: m.fit }, { pose: 'current' });
+    } catch (err) {
+      console.warn(`[sequence] ${file}: land-time glyph capture failed for "${h.name}" — using the preloaded mark`, err);
+    } finally {
+      fade?.((bind.icon?.outState.fade ?? 1) * (1 - glyphMix(m)));
+    }
+    if (!url) return;                     // the preloaded mark stands
+    glyphs.set(h.name, url);
+    // The ring's entry was built at plan time from the preloaded mark, so point
+    // it (and any other ring already holding this icon) at the new one.
+    for (const f of flow.filled) if (f && f.icon === h.name) f.glyph = url;
+  }
+
   // The landing turn. Captured once, at the frame the flight is first reached,
   // and normalised to the SHORTEST way round: a measured collect used to spin
   // to 4.8002 rad, freeze, and then snap to 0 in one frame — 275 degrees of
@@ -1106,6 +1153,10 @@ export function createSequence(doc, host) {
         else applyIcon(p.actor, ib.outState);
       }
       anchorLanded();
+      // AFTER anchorLanded, so the object is sitting at its final anchor, and
+      // before renderSlots below, so the mark this frame may already start
+      // fading up is the one just taken. See captureLandedGlyph().
+      if (p.move) captureLandedGlyph(p.move);
       setActive((p.incoming && t >= p.swapAt) ? p.incoming
         : (p.move && t >= p.move.flightStart ? null : p.actor));
     }
@@ -1124,6 +1175,7 @@ export function createSequence(doc, host) {
     host.setFrozen(h, flying);
     if (!flying) {
       m.rot = null;                                  // seeking back before the flight
+      m.captured = false;                            // …and so is the land-time mark
     } else if (t <= m.touchdown) {
       if (!m.rot) m.rot = captureRest(h);
       const r = m.rot, o = h.api.object.rotation, d = dragOf(h);
