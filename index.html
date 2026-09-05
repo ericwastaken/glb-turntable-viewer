@@ -90,7 +90,7 @@
      GLYPH_BOX in the sequence host) so the PNG and the live 3D object are the
      same size and the same projection at ring size. Change one, change both. */
   #fg .fg-slot .fg-glyph {
-    width: 76%; height: 76%; object-fit: contain; display: block;
+    width: 60%; height: 60%; object-fit: contain; display: block;
     background: transparent;   /* never let a UA paint a matte behind the PNG */
     /* Round the GLYPH's own corners with a mask, not a clip, and note the
        radius: this circle is 50% of the glyph box, which is .38 of the ring
@@ -1474,7 +1474,22 @@ const GLYPH_PX = 512;
 // the `#fg .fg-slot .fg-glyph` width in the CSS above, because the glyph is
 // captured through exactly that box so the PNG and the live object are the
 // same silhouette at ring size.
-const GLYPH_BOX = 0.76;
+//
+// WHY .60 AND NOT MORE. A square box's corners sit at half-width * sqrt(2). At
+// .76 that put them past the ring's inner edge and INSIDE the stroke, where
+// iOS Safari painted them as black notches at the four diagonals. Measured on
+// a real iPhone: a 55px ring with a 3.7px stroke has its band from r=23.8 to
+// r=27.5, and a .76 box (36px) has corners at 25.5 — squarely in it. At .60
+// (33px) the corners reach 23.3, inside the band, so the overhang cannot exist
+// no matter what the compositor does.
+//
+// This costs NO apparent size. GLYPH_BOX crops the CAPTURE and sizes the
+// ELEMENT by the same fraction, while the object's own scale comes from a
+// landing's `fit:`. A tighter box is a tighter crop shown in a smaller element:
+// the mark is identical on screen, with less empty margin around it. The art
+// still fits with room — its opaque content reaches ~.81 of half-width, which
+// is 14.6px against the 16.5px this box allows.
+const GLYPH_BOX = 0.60;
 let glyphTarget = null;
 
 function makeSequenceHost(comp) {
