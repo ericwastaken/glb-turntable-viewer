@@ -828,7 +828,15 @@ export function createSequence(doc, host) {
     if (p.move && p.move.releaseAt !== null) p.duration = Math.max(p.duration, p.move.releaseAt + p.move.xfade);
     p.on = stepOns[to ?? from];
     phase = p;
-    if (p.incoming) { toRest(p.incoming); p.incoming.wrapper.visible = false; }
+    if (p.incoming) {
+      toRest(p.incoming);
+      // The SAME reset the first step gets from enterStep(). An icon arriving
+      // through a transition is starting its step just as much as one arriving
+      // at a restart, and its controller has been accumulating yaw the whole
+      // time it was off screen.
+      if (sIn && startModeOf(sIn, to) === 'reset') host.resetMotion?.(p.incoming);
+      p.incoming.wrapper.visible = false;
+    }
     seekTo(0);
   }
 
