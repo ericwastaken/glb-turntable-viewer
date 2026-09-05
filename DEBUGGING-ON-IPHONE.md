@@ -153,6 +153,29 @@ So:
 
 ---
 
+## Reading a device screenshot correctly
+
+Two things will hand you a confident wrong answer.
+
+**The screenshot includes Safari's chrome.** A `shot` from `safaridriver` is the
+full screen, not the viewport, so page coordinates do not map to image pixels by
+`devicePixelRatio` alone — there is a constant vertical offset for the browser
+UI. Measured on one iPhone at DPR 3 it was **132 device pixels**, but do not
+hardcode that: read an element's `getBoundingClientRect()` and find the offset by
+locating something unmistakable in the image, then reuse it. A crop that is
+40px off looks entirely plausible and shows you the wrong part of the element.
+
+**Do not trust a derived metric over your own eyes.** A luminance sweep around a
+ring, sampling at a radius derived from the bright-pixel centroid, reported a
+ring "0/360 clean" while the ring visibly had four black bites in it — the
+centroid moves when the content changes, so the samples were landing off the
+stroke entirely. Look at the cropped image first, at 4x nearest-neighbour so
+nothing is smoothed away, and use the metric only to confirm what you can
+already see. If a person says they can see a defect and your number says there
+isn't one, **your number is wrong**.
+
+---
+
 ## What to actually measure on a device
 
 Things a desktop browser cannot tell you:

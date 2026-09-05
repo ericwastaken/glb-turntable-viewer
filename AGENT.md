@@ -1008,18 +1008,38 @@ Four things that will produce a WRONG conclusion if you do not know them:
     can sit indefinitely on a page that is not being painted, which is exactly
     a hidden pane, gotcha 1) and counts it as part of the first draw.
 
-20. **`overflow: hidden` with `border-radius` does not reliably clip on iOS
-    Safari.** A child's square box can paint to its corners even though the
-    parent is a circle, and desktop clips it correctly so the bug is invisible
-    until someone opens it on a phone. The collected-icon rings hit this: the
-    glyph is 76% of the ring, so its corners reach `.76/2*sqrt(2) = .537` of the
-    diameter — past the `.5` the circle allows — and they showed as dark notches
-    inside the ring. Fixed by adding `clip-path: circle(50%)`, which is honoured
-    on the compositor where `overflow` is not. **If you make a round container
-    that clips a square child, use `clip-path` and do not rely on `overflow`
-    alone.** The safer geometry is to keep the child under 70.7% so its corners
-    never leave the circle at all, but that changes the mark's size and the
-    capture box (`GLYPH_BOX`) has to move with it.
+20. **A round container clipping a square child is an iOS trap, and the CSS
+    answers for it are worse than the geometry.** `overflow: hidden` with
+    `border-radius` does not reliably clip on iOS Safari — a child's square box
+    can paint to its corners — and desktop clips it correctly, so the bug is
+    invisible until someone opens a phone. The collected-icon rings hit this and
+    then hit two failed fixes, both worth knowing so nobody repeats them:
+
+    - **`clip-path` on the RING made it worse.** `circle(50% at 50% 50%)`
+      resolves to a radius of exactly half the border box, which *is* the
+      stroke's outer edge, and iOS rasterises the clip a fraction inside it —
+      taking black bites out of the ring itself at the four diagonals. Measured
+      on a real iPhone: clip on, 10 of 360 stroke samples black; clip removed, 0.
+      **Never clip a bordered element at 50% of its own box.**
+    - **A `mask-image` on the GLYPH was unreliable.** It held for two rings and
+      failed on the third after `restart()`. Anything that promotes the element
+      to its own compositing layer puts you at the mercy of how iOS initialises
+      that layer.
+
+    **The fix is to remove the overhang, not to hide it.** A square box's
+    corners sit at `half-width * sqrt(2)`, so keep the child small enough that
+    they stay inside the container's INNER radius. Measured: a 55px ring with a
+    3.7px stroke has its band from `r=23.8` to `r=27.5`; a `.76` box (36px) puts
+    corners at 25.5, squarely inside it; `.60` (33px) puts them at 23.3, clear.
+    `GLYPH_BOX` is therefore **0.60**, and the CSS width must match it.
+
+    **This costs no apparent size**, which is the part that makes it a real fix
+    rather than a compromise: `GLYPH_BOX` crops the *capture* and sizes the
+    *element* by the same fraction, while the object's scale comes from a
+    landing's `fit:`. A tighter box is a tighter crop shown in a smaller
+    element — identical on screen, with less empty margin. Check the art still
+    fits before shrinking further: its opaque content reaches about `.81` of
+    half-width, 14.6px against the 16.5px this box allows.
 
 ---
 
