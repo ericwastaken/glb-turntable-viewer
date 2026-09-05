@@ -22,7 +22,7 @@
 //                         backgrounds: { nameB: backgrounds/alt.jpg }   optional, per icon
 //                         glyphs: { nameA: glyphs/a.png }               optional, per icon 2D mark
 //                         sequence: sequence.yml                        optional, entrance choreography
-//                         loading: { ground, image, animation,
+//                         loading: { ground, image, animation, message,
 //                                    slowAfter, failAfter }    optional, the loading curtain
 //                         (an icons.json with the same keys still loads, but is
 //                          deprecated and will be unsupported in a future version)
@@ -51,6 +51,7 @@ function resolveLoading(v) {
   if (typeof v.ground === 'string' && v.ground.trim()) out.ground = v.ground.trim();
   if (typeof v.image === 'string' && v.image.trim()) out.image = new URL(v.image.trim(), import.meta.url).href;
   if (typeof v.animation === 'string' && v.animation.trim()) out.animation = v.animation.trim();
+  if (typeof v.message === 'string' && v.message.trim()) out.message = v.message.trim();
   // Seconds. A pack meant for a phone over a relay can afford to wait longer
   // before saying so; one on a kiosk LAN should give up sooner. Anything that
   // is not a positive finite number is ignored and the viewer's own defaults

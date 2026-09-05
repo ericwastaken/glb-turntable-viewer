@@ -403,6 +403,11 @@ loading:                                  # optional, the loading curtain
   near-black ground and a soft pulsing disc. Both the default and a declared
   animation hold still under `prefers-reduced-motion`.
 
+- **`message`** — what a visitor reads while the pack loads. Defaults to
+  **`Loading…`**, and is shown from the first frame: a silent curtain is what
+  made a stalled load indistinguishable from a dead page. Keep it plain —
+  resource names appear only under `?dev=` and in the failure state, where
+  they are actionable.
   Two are **patience**, in seconds: `slowAfter` (default **15**) and
   `failAfter` (default **45**). Every network read in the load path is on
   those two thresholds — the manifest, the sequence file, each icon module,

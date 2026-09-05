@@ -52,5 +52,9 @@ sequence: sequence.yml
 loading:
   ground: "#0b0d16"        # near-black, a shade off this pack's dusk backdrop
   animation: pulse
+  # What a visitor reads while the pack loads. Plain language: the viewer's
+  # default is "Loading…" and resource names stay in ?dev= and the failure
+  # state, where they are actually actionable.
+  message: "Loading…"
   slowAfter: 15            # the viewer's own defaults, written out
   failAfter: 45

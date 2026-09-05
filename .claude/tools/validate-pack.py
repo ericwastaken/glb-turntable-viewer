@@ -831,7 +831,7 @@ def main(argv):
                               '{ ground: "#08080a", animation: pulse }')
             else:
                 for k in loading:
-                    if k not in ("ground", "image", "animation", "slowAfter", "failAfter"):
+                    if k not in ("ground", "image", "animation", "message", "slowAfter", "failAfter"):
                         warnings.append(f'{mf} "loading": unknown key "{k}" (ignored)')
                 waits = {}
                 for k in ("slowAfter", "failAfter"):

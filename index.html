@@ -652,7 +652,14 @@ const curtain = {
   // ground colour, an image, whether it moves, and (through loadMon) how long
   // before a slow load is called slow. Still no percentage: the count of
   // resources is honest, a percentage of bytes we never asked for is not.
+  // What the curtain SAYS while loading. A visitor is owed plain language, not
+  // the name of a module — resource names belong in the slow and failed states
+  // (and in ?dev=), where they are actionable. A pack can say something of its
+  // own with `loading: { message: … }`.
+  message: 'Loading…',
   appearance(decl) {
+    const m = typeof decl?.message === 'string' ? decl.message.trim() : '';
+    this.message = m || 'Loading…';
     curtainEl.style.background = decl?.ground ? String(decl.ground) : '';
     curtainMark.style.backgroundImage = decl?.image ? `url("${decl.image}")` : '';
     // With an image of its own the default's inset ring would frame it oddly.
@@ -727,13 +734,17 @@ const loadMon = (() => {
       return;
     }
     if (slowLabel) {
-      const text = `Still loading${plural()} — waiting on ${slowLabel}. This connection is slow.`;
+      const text = DEV
+        ? `Still loading${plural()} — waiting on ${slowLabel}. This connection is slow.`
+        : `Still loading${plural()}. This connection is slow.`;
       curtain.say('slow', text);
       hold(text);
       return;
     }
+    // Always something readable, from the first frame: a silent curtain is what
+    // made a stalled load indistinguishable from a dead page.
     const label = live.keys().next().value;
-    curtain.say('loading', label ? `Loading${plural()} — ${label}` : null);
+    curtain.say('loading', DEV && label ? `${curtain.message} (${label})` : curtain.message);
   }
 
   // A phase's timing line. Off outside ?dev= — this is an author's tool, and a
@@ -1748,7 +1759,7 @@ function makeSequenceHost(comp) {
     // resource gets.
     waitingFor(name, again) {
       curtain.raise('loading');
-      curtain.say('loading', `Loading ${name}…`);
+      curtain.say('loading', DEV ? `${curtain.message} (${name})` : curtain.message);
       holdStatus(`Loading ${name}…`);
       return detail => {
         if (detail) {
