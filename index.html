@@ -1020,6 +1020,15 @@ function makeSequenceHost(comp) {
       handles.set(name, h);
       return h;
     },
+    // A step entrance can ask for a deterministic pose. The icon module owns its
+    // controller, so the reset has to go through the loader — see resetMotion()
+    // in components/pack.component.js for why replacing the controller is the
+    // only thing that actually works.
+    resetMotion(h) {
+      if (!h) return;
+      try { h.api.resetMotion?.(); }
+      catch (e) { console.warn('resetMotion:', e); }
+    },
     setActive, setFrozen, rest, planMove, anchor, hitTest, glyphFor, beginFrame,
     attachDrag: attachIconDrag, detachDrag: detachIconDrag,
     dispose() {

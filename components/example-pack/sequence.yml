@@ -79,6 +79,17 @@ stage:
     slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.40, color: "#e9e3f4", dim: "#e9e3f433" }
   icon:
     ref: current                     # a flow always drives the icon itself
+    # How an icon is posed when a step it appears in BEGINS. Per-step `start:`
+    # overrides this.
+    #   reset     (default) back to the authored rest pose, every time
+    #   continue  leave it wherever it was
+    # This is not cosmetic. An icon's controller accumulates yaw for the life of
+    # the pack AND assigns rotation every frame, so with `continue` an icon shown
+    # a second time — a restart, or a flow that reuses an icon — snaps back on
+    # its first frame to whatever it had spun to. With `reset` an icon sits at
+    # effectively zero one frame after a restart — one frame of its own spin —
+    # while `continue` can bring it back most of a turn away.
+    start: reset
   overlay:
     line1: { type: text, top: 0.72, size: 0.05, weight: 700, tracking: 0.10 }
     line2: { type: text, top: 0.79, size: 0.05, weight: 700, tracking: 0.10 }

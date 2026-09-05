@@ -191,7 +191,9 @@ ACTIONS = ("replay", "nothing", "advance", "restart")
 FLOW_VERBS = ("advance", "restart")
 LAND_MODES = ("object", "glyph")
 LAND_KEYS = {"mode", "face", "fit", "after", "delay", "fade"}
-STEP_KEYS = {"id", "icon", "overlap", "copy", "timeline", "exit", "on", "end", "rest"}
+STEP_KEYS = {"id", "icon", "overlap", "copy", "timeline", "exit", "on", "end", "rest", "start"}
+# How an icon is posed when a step it appears in begins. Default "reset".
+START_MODES = ("reset", "continue")
 # `rest:` (spring-back after a drag) and `hit:` (the grab zone) are runtime
 # behaviour, not choreography, so they are top-level and step-overridable.
 REST_KEYS = {"spring", "dur", "ease"}
@@ -263,6 +265,9 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
             if not isinstance(decls, dict):
                 err('stage.icon must be a mapping such as { ref: current }')
                 continue
+            start = decls.get("start", "reset")
+            if start not in START_MODES:
+                err(f'stage.icon.start "{start}" must be one of {", ".join(START_MODES)}')
             ref = decls.get("ref", "current")
             if ref != "current" and ref not in icon_names:
                 err(f'stage.icon.ref "{ref}" is neither "current" nor a listed icon')
@@ -540,6 +545,8 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
         if not isinstance(step, dict):
             err(f"{where_s} must be a mapping")
             continue
+        if "start" in step and step["start"] not in START_MODES:
+            err(f'{where_s}.start "{step["start"]}" must be one of {", ".join(START_MODES)}')
         for k in step:
             if k not in STEP_KEYS:
                 warn(f'{where_s}: unknown key "{k}" (ignored)')

@@ -94,6 +94,21 @@ async function buildIcon(ctx, name, background, sequence, glyph) {
       if (controller) { controller.update(dt); icon.update?.(dt, controller); }
       else icon.update?.(dt);
     },
+    // Put this icon back to a known pose. A controller accumulates yaw for the
+    // life of the pack AND assigns rotation every frame, so an icon shown a
+    // second time snaps back to wherever it had spun to. Writing a rotation
+    // cannot fix that — the controller overwrites it on the very next frame —
+    // so the controller itself is replaced. That also clears pitch, both
+    // velocities and the sparkle phase in one move, with nothing required of
+    // the icon module.
+    resetMotion() {
+      if (mod.IconController) {
+        controller = new mod.IconController();
+        controller.setSheetFrames?.(icon.frameCount);
+      }
+      object.rotation.set(0, 0, 0);
+      icon.setSparklePhase?.(0);
+    },
     dispose() { icon.dispose?.(); },
   };
 }

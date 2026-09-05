@@ -66,6 +66,14 @@ const DEFAULTS = {
 // adds the third state (`next`) and gives a collected icon somewhere to land.
 export const ELEMENT_TYPES = { hud: ['slots', 'pips'], overlay: ['text', 'button'] };
 export const ACTIONS = ['replay', 'nothing', 'advance', 'restart'];
+// How an icon is posed when a step it appears in begins.
+//   reset    — back to the authored rest pose, every time (the default)
+//   continue — leave it wherever it was
+// This matters because an icon's controller accumulates yaw for the life of the
+// pack and assigns rotation every frame, so without a reset an icon shown a
+// second time (a restart, or a flow that reuses an icon) snaps back on its
+// first frame to whatever it had spun to before.
+export const START_MODES = ['reset', 'continue'];
 export const LAND_MODES = ['object', 'glyph'];
 const DEFAULT_FIT = 0.72;        // fraction of the target's inner diameter
 const DEFAULT_XFADE = 0.12;      // seconds of object -> glyph cross-fade
@@ -373,6 +381,10 @@ export function createSequence(doc, host) {
   const flowMode = verbsUsed.has('advance') || verbsUsed.has('restart');
 
   const ref = stage.icon?.ref ?? 'current';
+  const startDefault = stage.icon?.start ?? 'reset';
+  if (!START_MODES.includes(startDefault)) {
+    fail('stage.icon.start', `must be one of ${START_MODES.join(', ')}`);
+  }
   const packIcons = Array.isArray(host.iconNames) && host.iconNames.length ? host.iconNames : [host.iconName];
   const warnings = [];
 
@@ -693,6 +705,15 @@ export function createSequence(doc, host) {
     };
   }
 
+  // `start:` on the step wins over `stage.icon.start`; both default to reset.
+  function startModeOf(s, i) {
+    const m = s.start ?? startDefault;
+    if (!START_MODES.includes(m)) {
+      fail(`steps.${stepId(s, i)}.start`, `must be one of ${START_MODES.join(', ')}`);
+    }
+    return m;
+  }
+
   function enterStep(i) {
     const s = steps[i];
     const p = newPhase('entrance');
@@ -708,7 +729,14 @@ export function createSequence(doc, host) {
     p.on = stepOns[i];
     phase = p;
     for (const h of handles.values()) if (h !== p.actor) h.wrapper.visible = false;
-    if (p.actor) { toRest(p.actor); p.actor.wrapper.visible = true; }
+    if (p.actor) {
+      toRest(p.actor);
+      // Position, scale and any finger-left rotation are back to rest above.
+      // This is the icon's OWN motion, which lives in its controller and
+      // survives everything else.
+      if (startModeOf(s, i) === 'reset') host.resetMotion?.(p.actor);
+      p.actor.wrapper.visible = true;
+    }
     seekTo(0);
   }
 
@@ -1157,7 +1185,7 @@ export function createSequence(doc, host) {
 
   // ---- runtime -------------------------------------------------------------------------
   const runtime = {
-    file, warnings, flow: flowMode,
+    file, warnings, flow: flowMode, start: startDefault,
     targets: Object.keys(bind),
     icons: packIcons.slice(),
     storageKey: storeKey,

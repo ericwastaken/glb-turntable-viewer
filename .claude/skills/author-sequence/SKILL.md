@@ -164,6 +164,12 @@ Checklist for a flow:
     MOVES, so the tap target is stable even though it fades. Assert opacity
     reaches 0 during the transition and 1 again after the next step settles,
     with the rect unchanged throughout.
+- **`start: reset` is the default, and you usually want it.** An icon's
+  controller accumulates yaw for the life of the pack and assigns rotation every
+  frame, so `start: continue` means an icon shown a second time snaps back on its
+  first frame to wherever it had spun to. Test it by asserting rotation ONE FRAME
+  after a restart, not just immediately — immediately is always 0, and the jump
+  is on the next frame.
 - **Quote label expressions.** `at:` takes a number, `after`, or a
   `"label ± seconds"` string. Write the string form quoted — YAML turns a bare
   label named `on`/`off`/`yes`/`no` into a boolean, and an editor will otherwise

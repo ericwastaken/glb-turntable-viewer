@@ -1056,6 +1056,16 @@ look as final.
 
 ### 12.4 Timing, labels, stagger, easing
 
+- **`start:` decides an icon's pose when a step it appears in begins** —
+  `stage.icon.start` sets the default, a step's own `start:` overrides it.
+  `reset` (the default) returns it to the authored rest pose; `continue` leaves
+  it wherever it was. This is not cosmetic: an icon's controller accumulates yaw
+  for the life of the pack **and assigns rotation every frame**, so under
+  `continue` an icon shown a second time — a restart, or a flow that reuses an
+  icon — snaps back on its FIRST FRAME to whatever it had spun to. Writing a
+  rotation cannot fix that; `reset` replaces the controller, which also clears
+  pitch, both velocities and the sparkle phase. The loader exposes it as
+  `resetMotion()` and a pack needs to do nothing to get it.
 - All times are **seconds** (floats). `at:` is absolute by default because
   review notes arrive in absolute seconds ("pull the arrow to 2.6").
 - `at: after` (or no `at`) starts when the previous track in the list ends.
