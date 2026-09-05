@@ -22,6 +22,7 @@
 //                         backgrounds: { nameB: backgrounds/alt.jpg }   optional, per icon
 //                         glyphs: { nameA: glyphs/a.png }               optional, per icon 2D mark
 //                         sequence: sequence.yml                        optional, entrance choreography
+//                         loading: { ground, image, animation }         optional, the loading curtain
 //                         (an icons.json with the same keys still loads, but is
 //                          deprecated and will be unsupported in a future version)
 //   sequence.yml          optional — see AGENT.md §12; the viewer plays it, this file only reads it
@@ -37,6 +38,18 @@ function resolveBackground(v) {
   if (typeof v === 'object') return { ...v, image: v.image ? new URL(v.image, import.meta.url).href : undefined };
   const isColor = /^(#|rgb|hsl)/i.test(v.trim()) || /^[a-z]+$/i.test(v.trim());
   return isColor ? { color: v } : { image: new URL(v, import.meta.url).href };
+}
+
+// The optional `loading:` block styles the viewer's loading curtain (AGENT.md
+// §7). The loader only resolves the image path — the VIEWER owns the curtain,
+// and it is already up before this file has even been fetched.
+function resolveLoading(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out = {};
+  if (typeof v.ground === 'string' && v.ground.trim()) out.ground = v.ground.trim();
+  if (typeof v.image === 'string' && v.image.trim()) out.image = new URL(v.image.trim(), import.meta.url).href;
+  if (typeof v.animation === 'string' && v.animation.trim()) out.animation = v.animation.trim();
+  return Object.keys(out).length ? out : undefined;
 }
 
 async function buildIcon(ctx, name, background, sequence, glyph) {
@@ -195,5 +208,8 @@ export async function createComponent(ctx) {
     const glyph = typeof glyphs[name] === 'string' ? new URL(glyphs[name], import.meta.url).href : undefined;
     icons[name] = () => buildIcon(ctx, name, bg, sequence, glyph);
   }
-  return { icons };
+  // `loading` is returned alongside the icons rather than per icon: the viewer
+  // needs it BEFORE the first icon is built, which is the whole point of a
+  // curtain.
+  return { icons, loading: resolveLoading(manifest.loading) };
 }

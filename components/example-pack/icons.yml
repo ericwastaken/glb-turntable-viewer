@@ -29,3 +29,16 @@ background: backgrounds/dusk.jpg
 # Optional entrance choreography (AGENT.md §12). Leave the key out and the
 # pack behaves exactly as it always has.
 sequence: sequence.yml
+
+# Optional appearance for the LOADING CURTAIN — the opaque layer that is up
+# before the first paint and comes down the moment step 1 can draw (AGENT.md
+# §7). Three knobs, on purpose:
+#   ground     a CSS colour for the layer itself
+#   image      an image inside the pack, centred (optional)
+#   animation  pulse (default) | none
+# There is no spinner and no progress bar: there is no progress to report, only
+# a wait, and the rest of the pack keeps loading behind the lifted curtain.
+# A pack that declares nothing still gets a deliberate-looking default.
+loading:
+  ground: "#0b0d16"        # near-black, a shade off this pack's dusk backdrop
+  animation: pulse

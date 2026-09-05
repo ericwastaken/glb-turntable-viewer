@@ -52,6 +52,10 @@ backgrounds:
 glyphs:
   nameA: glyphs/a.png         # optional — a 2D mark a sequence drops into a slot
 sequence: sequence.yml        # optional — see the author-sequence skill
+loading:                      # optional — the viewer's loading curtain
+  ground: "#0b0d16"           #   a CSS colour for the layer
+  image: loading/mark.png     #   optional, centred, must be inside the pack
+  animation: pulse            #   pulse (default) | none
 ```
 
 (`icons.json` with the same keys is **deprecated** — it still loads with a
@@ -68,6 +72,13 @@ console warning and will be unsupported in a future version. Rename it to
   is resolved as a path relative to `component.js`.
 - `backgrounds` — optional per-icon overrides, same value rules, falling back
   to `background`.
+- `loading` — optional appearance for the viewer's **loading curtain**: the
+  opaque layer up from the first paint that comes down the moment your pack's
+  first step can draw. `ground` is a CSS colour, `image` a path inside the pack
+  (centred and contained), `animation` is `pulse` (the default) or `none`.
+  Deliberately no spinner and no progress bar — the remaining icons load behind
+  the lifted curtain, so there is nothing to report. A pack that leaves the key
+  out gets the viewer's own quiet default (`AGENT.md` §7).
 - `glyphs` — optional per-icon 2D mark: always a path inside the pack (never a
   colour), resolved relative to `component.js` and forwarded to the icon as
   `api.glyph`. A sequence shows it in a slot once that icon has been collected

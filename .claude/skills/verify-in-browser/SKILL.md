@@ -1,6 +1,6 @@
 ---
 name: verify-in-browser
-description: Serve this static viewer and confirm something actually works in a real browser — including how to test animation and pack sequences deterministically, since a hidden or headless pane pauses requestAnimationFrame and makes working code look broken. Use before claiming that a component, sidecar, icon pack, sequence, or URL you put together is done.
+description: Serve this static viewer and confirm something actually works in a real browser — including how to test animation and pack sequences deterministically (a hidden or headless pane pauses requestAnimationFrame and makes working code look broken), how to measure against the app's stage rather than the window, and how to exercise a phone layout, a swipe and a rotation lock from a desktop with ?dev=mobile. Use before claiming that a component, sidecar, icon pack, sequence, or URL you put together is done.
 ---
 
 # Verifying it in the browser
@@ -56,6 +56,8 @@ performance.getEntriesByType('resource')
 | `/?component=./components/example-pack/component.js` | Pack loader + pack mode + the example sequence, without the zip layer |
 | `/?pivot=0,0.5,0` | Manual spin axis |
 | `/?bg=backgrounds/starfield-default.jpg` | Background by path |
+| `/?component=./components/example-pack/component.js&dev=1,mobile` | The same pack on an emulated 375x812 phone stage: portrait sizing, swipe (wheel-driven), rotation lock |
+| `…&orientation=any` | Overrides a pack's `orientation:` so a locked pack can be reviewed the other way up |
 
 There is **no URL that loads a zip** — see step 5 below. The full parameter
 table, with constraints, is `AGENT.md` §4.
@@ -66,8 +68,20 @@ Defined at the bottom of `index.html`:
 
 ```js
 window.viewer = { THREE, scene, camera, renderer, pivot, controls,
-                  get model(), get component(), get sequence() };
+                  get model(), get component(), get sequence(),
+                  stage,                  // { w, h, left, top, portrait, orientation, emulated }
+                  get curtain(),          // { up, reason: 'loading' | 'orientation' | null }
+                  get orientation(),      // { stage, want, held }
+                  devStage };             // ?dev=mobile only: .size, .flip(), .set(w, h)
 ```
+
+**Measure against `viewer.stage`, never `innerWidth`/`innerHeight`.** The app
+composes against a stage element — the whole window normally, a letterboxed
+phone box under `?dev=mobile` — and every projection in the code is in stage
+coordinates. A `getBoundingClientRect()` is in WINDOW coordinates, so a check
+that mixes the two is wrong by the letterbox offset:
+`clientX - viewer.stage.left`. (In a hidden pane `innerWidth`/`innerHeight` are
+`0` as well.)
 
 `viewer.component` is `{ name, api, kind, root, seq }` — `kind` is `'object'`
 or `'material'`, `api` is literally what `createComponent()` returned, `root`
@@ -339,6 +353,27 @@ editor). If your component or pack does its own framing, emulate a phone
 viewport and confirm the subject is still in frame — framing that looks right
 on a wide desktop window can crop badly at phone aspect.
 
+For a **pack with a sequence**, use `?dev=mobile` instead of resizing the
+window: it gives a phone-sized letterboxed stage, a button (and
+`viewer.devStage.flip()`) to flip the simulated orientation, and the wheel
+mapped onto the swipe gesture. It is the only way to review a rotation lock, a
+`portrait:` override or a swipe without a device. It drives the same accessor a
+real phone changes, so there is no second implementation to be right about.
+
+```js
+const v = window.viewer, s = v.sequence;
+v.stage;                                   // 375 x 812 portrait, emulated: true
+v.devStage.flip();                         // as if the device turned
+[v.curtain, s.playing, s.held, s.time];    // a lock: curtain up, playing false, time PINNED
+v.devStage.flip();                         // back — same time, same step
+s.input;                                   // { zoom, drag, swipe } for the step showing now
+[v.controls.enableZoom, v.controls.enableRotate];   // the policy, as applied
+```
+
+The stage is **clamped to the window, never scaled** — at 1280x800 a requested
+375x812 is reported as 375x800. Make the window taller (1280x940 is enough) if
+you need the exact numbers.
+
 While you are there: the canvas must have **both** its `width`/`height`
 attributes and its `style.width`/`style.height` set. `renderer.setSize(w, h)`
 does this because `updateStyle` defaults to `true`. Passing `false` as the
@@ -358,5 +393,6 @@ Stop the server, and delete any scratch file you dropped into the repo root to
 test with. Finish with `git status` so nothing unintended is left behind.
 
 Nothing you did in the page persists: spin speed, pivot mode, the loaded
-sidecar, the custom background, and the loaded pack are all lost on reload.
+sidecar, the custom background, the loaded pack and the `?dev=mobile` stage are
+all lost on reload.
 Capture what you want to keep in a URL (`AGENT.md` §4) or a file.

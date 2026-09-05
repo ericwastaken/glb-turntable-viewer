@@ -186,18 +186,31 @@ LAYER_CHANNELS = {
 # `pips` is the Phase 1 progress row and is deprecated; `slots` replaces it.
 ELEMENT_TYPES = {"hud": ("slots", "pips"), "overlay": ("text", "button")}
 ELEMENT_KEYS = {"type", "top", "left", "size", "color", "weight", "tracking", "text",
-                "persist", "count", "gap", "dim", "ring"}
+                "persist", "count", "gap", "dim", "ring", "portrait"}
+# Only PLACEMENT is overridable per orientation. `type`, `text`, `persist`,
+# `count` and the colours are the element's identity, and an override able to
+# change those would be a second element wearing the same name.
+PORTRAIT_KEYS = {"top", "left", "size", "gap", "ring", "weight", "tracking"}
 ACTIONS = ("replay", "nothing", "advance", "restart")
 FLOW_VERBS = ("advance", "restart")
 LAND_MODES = ("object", "glyph")
 LAND_KEYS = {"mode", "face", "fit", "after", "delay", "fade"}
-STEP_KEYS = {"id", "icon", "overlap", "copy", "timeline", "exit", "on", "end", "rest", "start"}
+STEP_KEYS = {"id", "icon", "overlap", "copy", "timeline", "exit", "on", "end", "rest", "start", "input"}
 # How an icon is posed when a step it appears in begins. Default "reset".
 START_MODES = ("reset", "continue")
 # `rest:` (spring-back after a drag) and `hit:` (the grab zone) are runtime
 # behaviour, not choreography, so they are top-level and step-overridable.
 REST_KEYS = {"spring", "dur", "ease"}
 HIT_KEYS = {"padding"}
+# `input:` is one declaration for zoom, drag and swipe - sequence-wide, and
+# overridable per step exactly like `rest:`.
+INPUT_KEYS = {"zoom", "drag", "swipe"}
+SWIPE_KEYS = {"dir", "ratio", "distance", "time"}
+DRAG_MODES = ("icon", "camera", "none")
+SWIPE_DIRS = ("up", "none")
+# What a sequence was composed for. The lock is ADVISORY - the viewer prompts,
+# it cannot turn a device.
+ORIENTATIONS = ("portrait", "landscape", "any")
 EASE_NAME = re.compile(
     r"^(linear|none|in|out|inOut|outIn|(in|out|inOut|outIn)"
     r"(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$"
@@ -230,7 +243,8 @@ def ease_ok(value):
         return len(args) in (2, 4)
     return name in PARAM_EASES and len(args) <= 2
 AT_EXPR = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*(?:([+-])\s*([\d.]+))?\s*$")
-TOP_KEYS = ("version", "ease", "requires", "resume", "hit", "rest", "stage", "initial", "steps")
+TOP_KEYS = ("version", "ease", "requires", "resume", "hit", "rest", "input",
+            "orientation", "stage", "initial", "steps")
 
 
 def _is_num(v):
@@ -304,6 +318,22 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
             for k in decl:
                 if k not in ELEMENT_KEYS:
                     warn(f'{where}: unknown key "{k}" (ignored)')
+            # Per-orientation placement overrides, chosen by the stage's aspect
+            # ratio at runtime.
+            port = decl.get("portrait")
+            if port is not None:
+                if not isinstance(port, dict):
+                    err(f"{where}.portrait must be a mapping of placement overrides "
+                        "such as {{ size: 0.12, top: 0.11 }}".replace("{{", "{").replace("}}", "}"))
+                else:
+                    for k, v in port.items():
+                        if k not in PORTRAIT_KEYS:
+                            err(f'{where}.portrait.{k} cannot be overridden per orientation - '
+                                f'only {", ".join(sorted(PORTRAIT_KEYS))} can')
+                        elif k in ("top", "left") and not (_is_num(v) and 0 <= v <= 1):
+                            err(f"{where}.portrait.{k} must be a stage fraction 0-1")
+                        elif k in ("size", "tracking", "gap", "ring") and not _is_num(v):
+                            err(f"{where}.portrait.{k} must be a number")
             targets[name] = ("dom", t)
             if t == "slots":
                 count = decl.get("count", 3)
@@ -406,6 +436,44 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
                 warn(f'{where}: unknown key "{k}" (ignored)')
 
     check_rest(doc.get("rest"), "rest")
+
+    # -- input: zoom / drag / swipe (top level; a step may override it)
+    def check_input(decl, where):
+        if decl is None:
+            return
+        if not isinstance(decl, dict):
+            err(f"{where} must be a mapping such as {{ zoom: false, drag: icon, swipe: up }}")
+            return
+        if "zoom" in decl and not isinstance(decl["zoom"], bool):
+            err(f"{where}.zoom must be true or false")
+        if "drag" in decl and decl["drag"] not in DRAG_MODES:
+            err(f'{where}.drag "{decl["drag"]}" must be one of {", ".join(DRAG_MODES)}')
+        sw = decl.get("swipe")
+        if isinstance(sw, str):
+            if sw not in SWIPE_DIRS:
+                err(f'{where}.swipe "{sw}" must be one of {", ".join(SWIPE_DIRS)} '
+                    "- or a mapping { dir, ratio, distance, time }")
+        elif isinstance(sw, dict):
+            if "dir" in sw and sw["dir"] not in SWIPE_DIRS:
+                err(f'{where}.swipe.dir "{sw["dir"]}" must be one of {", ".join(SWIPE_DIRS)}')
+            for k in ("ratio", "distance", "time"):
+                if k in sw and not (_is_num(sw[k]) and sw[k] >= 0):
+                    err(f"{where}.swipe.{k} must be a number >= 0")
+            for k in sw:
+                if k not in SWIPE_KEYS:
+                    warn(f'{where}.swipe: unknown key "{k}" (ignored)')
+        elif sw is not None:
+            err(f"{where}.swipe must be {' / '.join(SWIPE_DIRS)} or a mapping "
+                "{ dir, ratio, distance, time }")
+        for k in decl:
+            if k not in INPUT_KEYS:
+                warn(f'{where}: unknown key "{k}" (ignored)')
+
+    check_input(doc.get("input"), "input")
+
+    # -- orientation: advisory rotation lock
+    if "orientation" in doc and doc["orientation"] not in ORIENTATIONS:
+        err(f'orientation "{doc["orientation"]}" must be one of {", ".join(ORIENTATIONS)}')
 
     # -- steps
     steps = doc.get("steps")
@@ -555,6 +623,7 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
         if "overlap" in step and not (_is_num(step["overlap"]) and step["overlap"] >= 0):
             err(f"{where_s}.overlap must be a number of seconds >= 0")
         check_rest(step.get("rest"), f"{where_s}.rest")
+        check_input(step.get("input"), f"{where_s}.input")
         if "exit" in step and not flow:
             warn(f"{where_s}.exit is only played when a step is LEFT, which needs a flow "
                  "(an `on:` using advance/restart)")
@@ -670,7 +739,8 @@ def main(argv):
                 errors.append(f'{mf} needs a non-empty "icons" list of folder names')
                 names = []
             for extra in manifest:
-                if extra not in ("icons", "background", "backgrounds", "glyphs", "sequence"):
+                if extra not in ("icons", "background", "backgrounds", "glyphs",
+                                 "sequence", "loading"):
                     warnings.append(f'{mf}: unknown key "{extra}" (ignored by the loader)')
         elif manifest is not None:
             errors.append(f"{mf} must be a mapping at the root")
@@ -739,6 +809,31 @@ def main(argv):
                     errors.append(
                         f'{mf} "glyphs"."{icon}" points at "{value}", which is not in the pack'
                     )
+
+        # --- loading: the curtain a pack shows while it comes up -------------
+        # Three knobs only, by design: no spinner, no progress bar.
+        loading = manifest.get("loading")
+        if loading is not None:
+            if not isinstance(loading, dict):
+                errors.append(f'{mf} "loading" must be a mapping such as '
+                              '{ ground: "#08080a", animation: pulse }')
+            else:
+                for k in loading:
+                    if k not in ("ground", "image", "animation"):
+                        warnings.append(f'{mf} "loading": unknown key "{k}" (ignored)')
+                img = loading.get("image")
+                if img is not None:
+                    if not isinstance(img, str) or not img.strip():
+                        errors.append(f'{mf} "loading".image must be a path inside the pack')
+                    elif img.strip() not in files:
+                        errors.append(f'{mf} "loading".image points at "{img}", '
+                                      "which is not in the pack")
+                anim = loading.get("animation")
+                if anim is not None and anim not in ("pulse", "none"):
+                    errors.append(f'{mf} "loading".animation must be pulse or none (got {anim!r})')
+                ground = loading.get("ground")
+                if ground is not None and (not isinstance(ground, str) or not ground.strip()):
+                    errors.append(f'{mf} "loading".ground must be a CSS colour')
 
     # --- sequence -----------------------------------------------------------
     # Optional `sequence: sequence.yml` in the manifest (AGENT.md §12). The file

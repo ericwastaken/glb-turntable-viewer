@@ -18,8 +18,10 @@ Quick orientation while you fetch it:
   python3 -m http.server 8000   # then open http://localhost:8000
   ```
 
-- Five URL parameters: `?model=`, `?sidecar=`, `?component=`, `?bg=`,
-  `?pivot=`. The full table with constraints is `AGENT.md` §4.
+- Eight URL parameters: `?model=`, `?sidecar=`, `?component=`, `?bg=`,
+  `?ui=`, `?dev=`, `?orientation=`, `?pivot=`. The full table with constraints
+  is `AGENT.md` §4. `?dev=mobile` gives an emulated phone stage — the only way
+  to review a pack's portrait layout, swipe or rotation lock from a desktop.
 - There are no tests. Verify in a browser via `window.viewer`, and read
   `AGENT.md` §8 and §10 before writing any timing-based check — a hidden
   browser pane pauses `requestAnimationFrame`, so waiting and then reading a
@@ -28,7 +30,11 @@ Quick orientation while you fetch it:
   sequence format (`sequence.yml`, an icon pack's choreography: an entrance,
   and optionally a tap-advanced flow that collects each icon into a slot) —
   it never owns spin, and it is verified with `viewer.sequence.seek(t)`, not
-  by waiting.
+  by waiting. It also declares what a finger may do (`input:`), the orientation
+  the piece was composed for (an ADVISORY rotate prompt — no page can turn a
+  device), and per-element `portrait:` sizing.
+- The app composes against a **stage**, not the window: read `viewer.stage`,
+  never `innerWidth`/`innerHeight` (`AGENT.md` §10.14).
 - **The viewer stores nothing** unless a pack's sequence opts in with a
   `resume:` block (`AGENT.md` §12.8). Keep it that way: this is a public tool,
   and a visitor's browser is not scratch space.

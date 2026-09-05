@@ -85,7 +85,7 @@ because components and backgrounds are same-origin only (§4).
 
 ## 4. URL parameters
 
-Seven, all read once at boot from `location.search`. There is no parameter that
+Eight, all read once at boot from `location.search`. There is no parameter that
 loads a zip — a zip arrives only by drop or the file picker (§7).
 
 | Parameter | Accepts | Example | Constraints / notes |
@@ -95,13 +95,43 @@ loads a zip — a zip arrives only by drop or the file picker (§7).
 | `?component=` | Relative path to an ES module | `?component=./components/example-shader-orb.js` | **Same-origin only** — `loadComponentURL()` rejects any other origin outright with a status-line message. Loaded **after** the model finishes loading, so `?model=…&component=…` works for a `{ material }` component. |
 | `?bg=` | Relative path to an image | `?bg=backgrounds/starfield-default.jpg` | **Same-origin only** — a cross-origin value is refused and the default backdrop stays. A component's or pack's own background overrides this while loaded. |
 | `?ui=` | `0` (also `none` / `off` / `false` / `hide`) | `?ui=0` | **Bare mode**: hides every viewer control — the picker, the buttons, the sequence transport, the status line, the drop hint, the links — leaving only the background layer, the canvas and a sequence's overlay. The elements stay in the DOM with their values intact, so anything reading `#speed`, `#modelSelect` or the transport still works; drag, zoom and taps are unaffected. Use it to show a pack as the page it is meant to be, and for clean screenshots and recordings. Any other value keeps the full UI. |
-| `?dev=` | `1` (or any value except `0`/`off`/`false`/`no`); `all` widens it | `?dev=1` | **Author mode.** Re-fetches `sequence.js` on every load (a token on the dynamic import — `import()` takes no cache option), **ignores a pack's saved `resume:` step** without deleting it, and shows a DEV badge. `?dev=all` also re-fetches the pack loader and every icon module, which re-downloads the whole pack each reload. **It cannot reach `index.html` or the vendored modules** — those are fetched before any of this code runs, and are `import`ed statically through the import map. For those, serve with the `viewer-dev` launch config (§3), which sends `Cache-Control: no-store`. A pack's `icons.yml` and `sequence.yml` are ALWAYS fetched `no-store`, dev mode or not: they are a few KB and are edited constantly. |
+| `?dev=` | `1` (or any value except `0`/`off`/`false`/`no`); `all` and `mobile` widen it; **comma-separated flags compose** | `?dev=1`, `?dev=1,mobile`, `?dev=mobile,all` | **Author mode.** Re-fetches `sequence.js` on every load (a token on the dynamic import — `import()` takes no cache option), **ignores a pack's saved `resume:` step** without deleting it, and shows a DEV badge. `?dev=all` also re-fetches the pack loader and every icon module, which re-downloads the whole pack each reload. `?dev=mobile` adds the **emulated phone stage** (§12.14 / below). **It cannot reach `index.html` or the vendored modules** — those are fetched before any of this code runs, and are `import`ed statically through the import map. For those, serve with the `viewer-dev` launch config (§3), which sends `Cache-Control: no-store`. A pack's `icons.yml` and `sequence.yml` are ALWAYS fetched `no-store`, dev mode or not: they are a few KB and are edited constantly. |
+| `?orientation=` | `portrait` / `landscape` / `any` (also `0`/`off`/`false`/`no` = `any`) | `?orientation=any` | **Overrides a sequence's `orientation:`** (§12.14) for this load. `any` is how you switch a pack's rotation lock off to review it the other way up; naming an orientation applies the lock even to a sequence that declared none. Anything else is ignored and the sequence's own declaration stands. |
 | `?pivot=` | Exactly three comma-separated finite numbers, `x,y,z`, in model units | `?pivot=0,0.5,0` | Forces the spin axis, overriding the Pivot dropdown. The model is positioned at the negation of this vector. Anything that is not three finite numbers (`?pivot=0,0.5`, `?pivot=a,b,c`) is **silently ignored** and the dropdown's mode applies. |
 
-All five combine. Verified together against a live server:
+They all combine. Verified together against a live server:
 `?model=models/DamagedHelmet.glb&sidecar=sidecars/example-emerald-glass.json&pivot=0,0.5,0&bg=backgrounds/starfield-default.jpg`
 loaded the helmet, applied the sidecar's `"*"` fallback colour, set
 `model.position` to `[0, -0.5, 0]`, and swapped the backdrop.
+
+### `?dev=mobile` — the emulated stage
+
+A phone-sized, letterboxed **stage** inside the desktop window. It exists
+because two of the things below cannot be reviewed on a desktop at all: a
+rotation lock (§12.14) and a swipe (§12.13).
+
+- The app composes against the **stage**, never against `innerWidth` /
+  `innerHeight`. `window.viewer.stage` is `{ w, h, left, top, portrait,
+  orientation, emulated }` and is what the renderer size, the camera aspect,
+  the ring anchoring, the pointer hit test, the glyph capture, the
+  drag-to-turn distance and a sequence's `portrait:` overrides all read. The
+  emulator substitutes that one accessor — there is deliberately **no second
+  implementation** of orientation or gesture logic, because a lock that only
+  worked in the emulator would be worse than none.
+- The overlay's type unit follows it too: `size` is written as
+  `calc(var(--vmin) * n)`, and `--vmin` is `1vmin` normally and the emulated
+  stage's own px value under `?dev=mobile`.
+- A control bar (bottom left, alive in bare mode) **reports the stage the app
+  actually sees** and flips the simulated orientation. `window.viewer.devStage`
+  is the same thing for a script: `.size`, `.flip()`, `.set(w, h)`.
+- The **wheel is mapped onto the swipe channel** so the gesture can be
+  exercised with a trackpad or a mouse. It runs through the sequence's own
+  classifier (`viewer.sequence.router.wheel(dy)`), not a copy of it.
+- The stage is **clamped to the window, never scaled**. A transform would put
+  pointer coordinates and the overlay's client rects in a different space from
+  the stage the app measures, and two coordinate systems is the exact bug the
+  accessor exists to prevent. So make the window big enough: at 1280x800 a
+  requested 375x812 stage is reported (and rendered) as 375x800.
 
 Useful single-purpose routes:
 
@@ -111,6 +141,7 @@ Useful single-purpose routes:
 | `/?model=models/DragonAttenuation.glb&sidecar=sidecars/example-emerald-glass.json` | Sidecar system |
 | `/?component=./components/example-shader-orb.js` | Single-file component |
 | `/?component=./components/example-pack/component.js` | A pack, **without** the zip/service-worker layer |
+| `/?component=./components/example-pack/component.js&dev=1,mobile` | The same pack on an emulated 375x812 phone stage (§12.14) |
 
 ---
 
@@ -306,6 +337,7 @@ my-pack.zip
 ├── icons.yml           ← the manifest
 ├── sequence.yml        ← optional entrance choreography, named from icons.yml (§12)
 ├── backgrounds/        ← optional images referenced from icons.yml
+├── loading/            ← optional image for the loading curtain (`loading:` below)
 └── icons/
     ├── nameA/
     │   ├── src/index.js    ← the standard exports (below)
@@ -330,6 +362,10 @@ backgrounds:                              # optional, per icon
 glyphs:                                   # optional, per icon 2D mark (§12.6)
   twist: glyphs/twist.png
 sequence: sequence.yml                    # optional, choreography (§12)
+loading:                                  # optional, the loading curtain
+  ground: "#0b0d16"                       #   a CSS colour for the layer
+  image: loading/mark.png                 #   optional, centred, inside the pack
+  animation: pulse                        #   pulse (default) | none
 ```
 
 - `icons` — **required**, non-empty list of folder names under `icons/`. An
@@ -353,6 +389,27 @@ sequence: sequence.yml                    # optional, choreography (§12)
   `api.glyph`. A sequence shows it in a slot once that icon has been collected;
   an icon with no entry gets one **derived** by the viewer, so this key is
   never required (§12.6).
+
+- `loading` — optional appearance for the **loading curtain**: the opaque
+  layer that is up from the first paint and comes down the instant step 1 of a
+  sequence can draw (its t=0 pose applied). Three keys only — `ground` (a CSS
+  colour), `image` (a path inside the pack, centred and contained) and
+  `animation` (`pulse`, the default, or `none`). **There is no spinner and no
+  progress bar**, because there is no progress to report: the rest of the pack
+  (every other icon, and every derived glyph) keeps loading *behind* the lifted
+  curtain, which is the difference between a first frame in a few hundred
+  milliseconds and one in several seconds. A pack that declares nothing gets
+  the viewer's own quiet default: a near-black ground and a soft pulsing disc.
+  Both the default and a declared animation hold still under
+  `prefers-reduced-motion`. Measured on the example pack with `?dev=all` (so
+  every icon module is a real fetch): the curtain lifted at **124.7 ms**, the
+  third icon's module only arrived at **157.5 ms**, and `sequence.ready`
+  settled at **162.9 ms**.
+- **With `?component=` and no `?model=`, no sample model is loaded at all.**
+  An `{ object }` component — every pack is one — replaces the model outright,
+  so the boot used to download and render a model nobody ever saw and then swap
+  it out. That swap was the visible blink. Verified: `?component=…` now makes
+  **zero** requests under `models/`.
 
 Keep background images web-sized — roughly a 2732-px-tall JPEG at quality ~80.
 
@@ -621,6 +678,13 @@ The page has a `@media (max-width: 640px)` layout (compact HUD, bottom-sheet
 editor). If your component or pack does its own framing, emulate a phone
 viewport and confirm the subject is still in frame — see §10.4.
 
+For a **pack with a sequence**, `?dev=mobile` (§4) is the better tool: it gives
+a letterboxed phone stage inside your desktop window, drives the same accessor
+a real device does, and is the only way to review a rotation lock (§12.14), a
+`portrait:` override (§12.15) or a swipe (§12.13) without a phone in your hand.
+Measure against **`viewer.stage`**, never `innerWidth`/`innerHeight` — under
+emulation they are different numbers and only one of them is what the app used.
+
 ---
 
 ## 9. Troubleshooting by symptom
@@ -645,7 +709,11 @@ viewport and confirm the subject is still in frame — see §10.4.
 | **"My second pack replaced my first."** | Only one pack is resident at a time | §11 |
 | **"Nothing I set survives a reload."** | There is no persistence at all | §11 — put it in the URL (§4) |
 | **"My icon is invisible / tiny after the pack loads"** in a pane | The pack has a sequence, whose t=0 pose is faded-out and small; a hidden pane never advances it | §10.13 — `viewer.sequence.seek(t)` |
-| **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer, a `to:` that names nothing | §12 — the message names the track |
+| **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer, a `to:` that names nothing, a `portrait:` key that is not a placement key | §12 — the message names the track |
+| **"The page is a flat colour and nothing ever appears."** | The loading curtain never came down — the pack failed before step 1 could draw | Read `#status`: every failure path lowers it and reports there (§7, §10.8) |
+| **"A rotate glyph appeared and everything stopped."** | The sequence declares an `orientation:` this stage does not satisfy | §12.14 — `?orientation=any` reviews it the other way up |
+| **"My swipe rotates the icon instead of advancing."** | It was too slow, too diagonal, or too short to classify as a swipe | §12.13 — the thresholds are `input.swipe` |
+| **"Scroll no longer zooms in my pack."** | `input.zoom` defaults to **false** for a sequence — a pack composes a fixed frame | §12.13 — say `zoom: true` if you want it |
 | **"My edit to `sequence.js` had no effect."** | The browser served the cached module | §12.11 — hard-reload, or serve with `Cache-Control: no-store` |
 | **"The collected icon lands but keeps spinning."** | It is still in the update path; its controller reassigns rotation every frame | §12.6 — a landing leaves the update path as the flight *begins* |
 | **"The collected icon jumps as it lands."** | Something is assigning rotation at touchdown instead of tweening to rest across the flight | §12.6 — the turn is derived from `t`, on the shortest path |
@@ -762,6 +830,30 @@ viewport and confirm the subject is still in frame — see §10.4.
     right even though the icon is at 48 % — do not "fix" framing from a t=0
     screenshot.
 
+14. **Measure against `viewer.stage`, not `innerWidth`/`innerHeight`.** The app
+    composes against a STAGE element (§4), which is the whole window normally
+    and a letterboxed phone box under `?dev=mobile`. Every projection in the
+    app — the ring anchoring, the pointer hit test, the glyph crop, the
+    drag-to-turn distance — is in **stage coordinates**, and a `getBoundingClientRect()`
+    is in WINDOW coordinates, so a check that mixes the two is wrong by the
+    letterbox offset. Convert: `clientX - viewer.stage.left`. In a hidden pane
+    `innerWidth`/`innerHeight` are also `0` (gotcha 1), which the stage
+    accessor clamps to 1 rather than dividing by zero.
+
+15. **A stage size is CLAMPED to the window, never scaled.** `?dev=mobile` at
+    375x812 in a 1280x800 window gives you a 375x**800** stage, and says so in
+    the control bar. Scaling would have created a second coordinate system;
+    resize the window instead (verified at 1280x940).
+
+16. **`vmin` and the icon's framing agree on a desktop and disagree on a
+    phone.** Overlay elements are sized in vmin (`placeElement`), while the 3D
+    icon is framed against stage HEIGHT (`framing.heightFraction` → camera
+    distance through the vertical FOV). At 1280x800 vmin **is** the height, so
+    they match exactly; at 375x812 they diverge by **2.2x**, which is why a
+    slot row and a call-to-action authored on a desktop read as specks on a
+    phone. That is what `portrait:` (§12.15) is for. Do not try to derive a
+    correction factor — the right mobile proportions are a design decision.
+
 ---
 
 ## 11. What this viewer does not do
@@ -787,7 +879,18 @@ Verified against the source. Do not attempt these — they are not there to find
   rotation channel (ever — §12), no keyframes beyond `[from, to]`, no camera
   moves, no springs, no `goto` verb. Step-to-step transitions exist, but only
   in one direction and only through `advance` / `restart` (§12.7). See §12 for
-  the exact vocabulary.
+  the exact vocabulary. `input:`, `orientation:` and `portrait:` (§12.13–§12.15)
+  are DECLARATIONS about input and layout, not new animation.
+- **No forced rotation.** A sequence's `orientation:` is **advisory**: the
+  viewer detects a mismatch by aspect ratio, drops its curtain, shows a rotate
+  glyph and holds the sequence — it never claims to turn the device.
+  `screen.orientation.lock()` needs fullscreen and does not exist in mobile
+  Safari at all, and nothing here is written against an API that is missing on
+  the platform that matters most (§12.14).
+- **No progress reporting while a pack loads.** The curtain (§7, `loading:`) is
+  a ground colour, an optional image and a pulse. There is no spinner library,
+  no percentage and no fake progress bar — a pack's total work is not known in
+  advance, and the remaining icons load behind the lifted curtain anyway.
 - **No persistence, unless a pack asks for it.** No cookies and no server. Spin
   speed, pivot mode, the loaded sidecar, the custom background, and the loaded
   pack are all lost on reload; the only way to restore those is the URL (§4).
@@ -837,7 +940,7 @@ per layer rather than in one flat list.
 | **icon** | The 3D icon, under a **wrapper Group** | The pack (look, idle spin) — the sequence gets the wrapper, and routes drags | `fade`, `scale`, `rise`, `to:` (a move to a 2D element), and the wrapper's drag yaw/pitch (§12.12) |
 | **overlay** | `#fg` — 2D text and buttons above the canvas | Created from `stage.overlay` | `fade`, `rise`, `blur`, `wipe`, `bloom` |
 
-`#fg` is a fixed, viewport-sized DOM layer above the canvas (real text:
+`#fg` is a STAGE-sized DOM layer above the canvas (real text:
 selectable, accessible), `pointer-events: none` except on elements a step
 binds an action to, and emptied whenever the icon or pack unloads. **It is
 built once and lives for the whole flow** — slots have to accumulate, and a
@@ -902,6 +1005,20 @@ resume:
   minutes: 60                             # idle window; TTL runs from the last state change
   id: example-pack                        # localStorage key; defaults to the pack's name
 
+# One declaration for what a finger may do (§12.13). Sequence-wide; a step may
+# override any of it. `zoom: false` is the DEFAULT for a pack.
+input:
+  zoom: false                             # scroll/pinch camera dolly
+  drag: icon                              # icon | camera | none
+  swipe: up                               # up | none — fires the active CTA
+  # …or the long form, when a threshold needs retuning:
+  # swipe: { dir: up, ratio: 1.5, distance: 0.08, time: 0.5 }
+
+# What this sequence was composed for (§12.14). portrait | landscape | any
+# (the default). ADVISORY: on a mismatch the viewer curtains the stage, shows a
+# rotate glyph and HOLDS the sequence. ?orientation= overrides it (§4).
+orientation: any
+
 # How big a grab zone each icon gets, as a fraction of its projected radius
 # (§12.12). A press is hit-tested; a press that hits nothing rotates nothing.
 hit:
@@ -924,8 +1041,11 @@ stage:
     # `count` rings. Each ring is separately addressable as a `to:`
     # destination under the element's name plus a 1-based index —
     # here slot1, slot2, slot3.
+    # `portrait:` overrides PLACEMENT only, when the stage is taller than wide
+    # (§12.15). Chosen by aspect ratio, re-evaluated on every resize.
     slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.45,
-            color: "#e9e3f4", dim: "#e9e3f433" }
+            color: "#e9e3f4", dim: "#e9e3f433",
+            portrait: { size: 0.12, top: 0.11 } }
   icon:
     ref: current                          # `current` = every icon; a flow requires `current`
   overlay:
@@ -934,7 +1054,7 @@ stage:
     # persist: once it has arrived it is never hidden and never re-animated,
     # so the tap target does not move between steps.
     cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff",
-             persist: true }
+             persist: true, portrait: { size: 0.085, top: 0.88 } }
 
 # State at frame 0 — not motion. Slots take `filled` (a count, or a list of
 # icon names); any target may also take channel values here (e.g. line1: { fade: 0 }).
@@ -997,6 +1117,8 @@ steps:
   - id: two
     icon: gem
     overlap: 0.35                         # this entrance starts 0.35 s BEFORE the
+    # A step may override `rest:` and `input:` for as long as it is showing:
+    # input: { drag: none, swipe: none }
     copy:                                 # previous exit ends (§12.7)
       line1: "A SECOND ICON"
       line2: "THE SAME CHOREOGRAPHY"
@@ -1020,8 +1142,8 @@ steps:
     end: hold
 ```
 
-Top-level keys: `version`, `ease`, `requires`, `resume`, `hit`, `rest`,
-`stage`, `initial`, `steps`. Anything else is ignored with a validator warning. Everything below
+Top-level keys: `version`, `ease`, `requires`, `resume`, `hit`, `rest`, `input`,
+`orientation`, `stage`, `initial`, `steps`. Anything else is ignored with a validator warning. Everything below
 the top level that is wrong — an undeclared target, a channel the layer does
 not have, a `to:` that names nothing, an unknown landing mode or verb, a step
 naming an icon the pack does not have, an unknown label or ease, a non-numeric
@@ -1412,7 +1534,7 @@ no property.
 const s = window.viewer.sequence;   // null when the icon has no sequence
 s.duration;         // seconds — the CURRENT phase, e.g. 3 or 3.35
 s.time;             // current time, clamped to [0, duration]
-s.playing;          // false once `end: hold` is reached, or after pause()
+s.playing;          // false once `end: hold` is reached, after pause(), or while HELD
 s.seek(t);          // exact: renders every target for time t, in either direction
 s.play();           // from the end, restarts at 0
 s.pause();
@@ -1423,6 +1545,13 @@ s.phase;            // 'entrance' | 'transition'
 s.slots;            // [{icon:'twist', as:'glyph', mix:1}, null, null] at the current time
                     // `mix` is the object -> glyph cross-fade: 0 = object, 1 = mark
 s.hit;              // { padding: 0.25 } — the grab zone in force (§12.12)
+s.input;            // { zoom, drag, swipe: { dir, ratio, distance, time } } — §12.13,
+                    // resolved for the step showing RIGHT NOW
+s.orientation;      // 'portrait' | 'landscape' | 'any' — what it was composed for (§12.14)
+s.held;             // true while a rotation lock is holding it
+s.hold(on);         // hold/release WITHOUT touching time or step. Not pause(),
+                    // whose partner play() restarts a phase that reached `end: hold`
+s.router;           // the pointer router — .wheel(dy) feeds the swipe classifier
 s.rest;             // { spring, dur, ease } — the spring-back in force RIGHT NOW
 s.grabbed;          // the icon being dragged, or null
 s.turns;            // { twist: { yaw, pitch, springing }, … } — the runtime's own
@@ -1430,7 +1559,10 @@ s.turns;            // { twist: { yaw, pitch, springing }, … } — the runtime
 s.icons;            // every icon in the pack, in manifest order
 s.advance();        // the verbs, for scripted checks — these DO persist
 s.restart();
-s.ready;            // promise: preload + glyph capture done
+s.posed;            // promise: the STARTING STEP can draw (its t=0 pose applied).
+                    // This is what the loading curtain waits for (§7)
+s.ready;            // promise: preload + glyph capture done — runs BEHIND the
+                    // lifted curtain, deliberately
 s.storageKey;       // 'glb-viewer:seq:example-pack', or null when resume is off
 s.saved;            // the parsed stored state, or null
 s.targets;          // ['slot','slot1','slot2','slot3','line1','line2','cta','icon']
@@ -1487,8 +1619,11 @@ o.rotation.y === r0 && Math.cos(r0) > 0.9999;   // true — frozen, resting at f
 const probe = () => {                             // screen offset from ring centre
   const r = document.querySelectorAll('#fg .fg-slot')[0].getBoundingClientRect();
   const p = w.getWorldPosition(new v.THREE.Vector3()).project(v.camera);
-  return [(p.x * .5 + .5) * innerWidth - (r.left + r.width / 2),
-          (-p.y * .5 + .5) * innerHeight - (r.top + r.height / 2)].map(n => +n.toFixed(2));
+  // v.stage, NOT innerWidth/innerHeight (§10.14): the projection is in STAGE
+  // coordinates and getBoundingClientRect() is in WINDOW coordinates, so the
+  // letterbox offset has to be added back or the check is wrong by it.
+  return [(p.x * .5 + .5) * v.stage.w + v.stage.left - (r.left + r.width / 2),
+          (-p.y * .5 + .5) * v.stage.h + v.stage.top - (r.top + r.height / 2)].map(n => +n.toFixed(2));
 };
 probe();                                          // [0, 0]
 v.renderer.domElement.dispatchEvent(new WheelEvent('wheel',
@@ -1496,6 +1631,9 @@ v.renderer.domElement.dispatchEvent(new WheelEvent('wheel',
 v.controls.update(); s.seek(s.time);
 probe();                                          // [0, 0] — still. Same after a
                                                   // resize and an orientation change.
+// …and inside the letterboxed ?dev=mobile stage, where the stage origin is not
+// (0, 0). Measured: [0, 0] at 375x812, flipped to 812x375, flipped back, and
+// resized to 414x896.
 
 // --- the end, and restart
 s.seek(s.duration); document.querySelector('#fg [data-seq="cta"]').click();  // → three
@@ -1514,6 +1652,40 @@ s.seek(1.4); s.play(); s.pause();
 localStorage.getItem(s.storageKey) === before2; // true — the transport never writes
 ```
 
+Input, orientation and portrait sizing (§12.13–§12.15) — all of it readable,
+none of it needing a stopwatch:
+
+```js
+const v = window.viewer, s = v.sequence;
+s.input;                                        // { zoom:false, drag:'icon', swipe:{dir:'up',…} }
+[v.controls.enableZoom, v.controls.enableRotate];   // [false, false] — the policy, applied
+v.stage;                                        // { w, h, left, top, portrait, orientation, emulated }
+
+// zoom is genuinely off: a wheel must not move the camera
+const z = v.camera.position.z;
+v.renderer.domElement.dispatchEvent(new WheelEvent('wheel',
+  { deltaY: -240, clientX: v.stage.w / 2, clientY: v.stage.h / 2, bubbles: true }));
+v.controls.update(); v.camera.position.z === z;                    // true
+
+// a swipe fires the SAME verb a tap does, and only when one is live
+s.seek(s.duration);                             // the CTA is actionable here
+// …a fast vertical pointerdown/move/up over the canvas…
+s.step;                                         // advanced
+
+// the rotation lock, without a phone (?dev=mobile)
+v.orientation;                                  // { stage:'portrait', want:'portrait', held:false }
+v.devStage.flip();                              // the accessor a real rotation changes
+[v.curtain, s.playing, s.held, s.time];         // {up:true,reason:'orientation'}, false, true, t
+v.devStage.flip();
+[v.curtain, s.playing, s.time];                 // {up:false,…}, true, the SAME t
+
+// portrait sizing — the same --vmin either way up, so only the override varies
+v.devStage.set(375, 812);
+document.querySelector('#fg .fg-slot').getBoundingClientRect().width;   // 45
+v.devStage.flip();
+document.querySelector('#fg .fg-slot').getBoundingClientRect().width;   // 28.13
+```
+
 Then the invariants that must survive any change:
 
 ```js
@@ -1528,6 +1700,10 @@ const before = JSON.stringify(s.turns);
 JSON.stringify(s.turns) === before;                                                      // true
 // a pack with no sequence loads neither module:
 performance.getEntriesByType('resource').map(e => e.name).filter(n => /sequence\.js|anime/i.test(n));  // []
+// ?component= loads NO sample model at all (§7):
+performance.getEntriesByType('resource').map(e => e.name).filter(n => /\/models\//.test(n));           // []
+// the curtain is in the initial HTML, not added by JS:
+// curl the page and grep for id="curtain" — it must be there before any script runs.
 ```
 
 Unloading (`⏏ Unload …`, or loading any model) disposes the sequence, empties
@@ -1618,17 +1794,210 @@ rest:
 Taps are unchanged: `on: { <element>.tap: … }` still only binds 2D elements
 (§12.7). The canvas answers drags, not taps.
 
-### 12.13 Deliberately not supported
+### 12.13 Input — `input:`, one declaration for zoom, drag and swipe
+
+Three things a finger can do, declared in one place instead of accumulating.
+Sequence-wide, and **any step may override any of it** for as long as it is
+showing (exactly like `rest:`).
+
+```yaml
+input:
+  zoom: false        # scroll/pinch camera dolly. DEFAULT false for packs.
+  drag: icon         # icon | camera | none
+  swipe: up          # up | none — fires the active call-to-action
+```
+
+| Key | Values | Default | Wired to |
+|---|---|---|---|
+| `zoom` | `true` / `false` | **`false`** | `controls.enableZoom` |
+| `drag` | `icon` / `camera` / `none` | `icon` | the hit-testing router (§12.12), or `controls.enableRotate`, or neither |
+| `swipe` | `up` / `none`, or a mapping | `up` | the gesture classifier below |
+
+**`zoom: false` is the default, and it is a fix.** `enableZoom` was referenced
+*nowhere* in the app before this, so OrbitControls' own `true` applied and a
+scroll or a pinch dollied the camera even in pack mode — where a composed,
+fixed frame is the entire point. Nobody had chosen that. A pack that genuinely
+wants a visitor to pull the icon closer says `zoom: true`. (A viewer showing a
+plain model still zooms: this default belongs to the sequence, not to the app.)
+
+**`drag:`** unifies what used to be three unrelated code paths. `icon` keeps the
+existing hit-testing and grab zones exactly as §12.12 describes them; `camera`
+hands the drag back to OrbitControls; `none` means a drag turns nothing at all.
+
+**Swipe — classified by the GESTURE, not by where it started.** A flick that
+begins on the icon still counts, because the icon fills the middle of the stage
+and that is where a thumb lands.
+
+```yaml
+input:
+  swipe: { dir: up, ratio: 1.5, distance: 0.08, time: 0.5 }
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `dir` | `up` advances; `none` switches the channel off | `up` |
+| `ratio` | `\|dy\|` must beat `\|dx\|` by this much | `1.5` |
+| `distance` | fraction of the **stage's height** the finger must cover | `0.08` |
+| `time` | the longest a flick may take, in seconds | `0.5` |
+
+- **Swipe UP advances**, matching "scroll down a page".
+- It fires **only when a call-to-action is actionable** — the runtime already
+  marks those elements `fg-action`, and a step's `on:` supplies the verb. A
+  swipe during a transition, or on a step with no `advance`, therefore does
+  *nothing at all*. A tap and a swipe run the **same** `fireAction()` through
+  the same guard, so "the button works but the swipe does not" cannot happen.
+- Anything slower or rounder than the thresholds stays an icon drag.
+- A gesture reclassified as a swipe **after it has already turned the icon** is
+  not left crooked: the release always arms the `rest:` spring-back (§12.12),
+  which returns it while the step advances.
+- `?dev=mobile` maps the **wheel** onto this same classifier so the gesture can
+  be exercised with a trackpad (§4). One notch is not a swipe; enough
+  accumulated wheel inside 300 ms is.
+
+Measured on the example pack at 900x814 (`viewer.sequence.router`, synthetic
+pointer events):
+
+| Gesture | Result |
+|---|---|
+| 240 px up in 180 ms | step `one` → `two`, phase `transition`, duration 3.35 |
+| 200 px up in 900 ms, over the icon | no step change; wrapper pitch −1.2 rad, `springing: true` |
+| 200 px up in 170 ms, over the icon | step `two` → `three` **and** pitch −1.2 rad → −0.0000125 rad after the spring |
+| 240 px up in 160 ms, 80 ms into a transition | nothing: step and slots unchanged |
+| 240 px up in 160 ms on the held end state | `restart` — slots `[twist, gem, prism]` → `[null, null, null]` |
+| wheel, one 40 px notch (threshold 65 px) | nothing |
+| wheel, four 40 px notches | step `one` → `two` |
+
+And the policy itself, on a pack declaring `drag: camera` with a step
+overriding `{ drag: none, swipe: none, zoom: true }`:
+
+| State | `enableRotate` | `enableZoom` | A 170 px horizontal drag |
+|---|---|---|---|
+| `drag: icon`, `zoom: false` | `false` | `false` | turns the icon; camera z 4.96791 → 4.96791 on a wheel |
+| `drag: camera` | `true` | `false` | azimuth 0 → −1.14832 rad, `turns` stays `{}` |
+| step override `drag: none` | `false` | `true` | nothing moves; a wheel dollies 4.9067 → 4.3317 |
+
+`viewer.sequence.input` reports the resolved policy for the step showing now.
+
+### 12.14 Orientation — `orientation:`, an advisory rotation lock
+
+```yaml
+orientation: portrait      # portrait | landscape | any   (default any)
+```
+
+On a mismatch the viewer **drops its curtain over the stage, plays a rotate
+glyph with NO TEXT, and HOLDS the sequence**. On returning to a supported
+orientation the curtain lifts and play resumes at exactly the time and step it
+stopped at.
+
+- **It is advisory, and that shapes the whole approach.**
+  `screen.orientation.lock()` requires fullscreen and **does not exist in
+  mobile Safari**, so there is no code path here that turns a device: the
+  viewer detects, and prompts. Never describe this as forcing rotation.
+- **The decision is by ASPECT RATIO** (`viewer.stage.orientation`), never by
+  `screen.orientation` or the Screen Orientation API — so a resized desktop
+  window, `?dev=mobile` and a real phone behave identically, and there is
+  nothing to be missing on the platform that matters most. A square stage
+  counts as landscape. Re-evaluated on `resize` and on `orientationchange`.
+- **Nothing advances behind the curtain.** Not the sequence — it must not walk
+  on to the next step where no one can see it — and not the turntable, the
+  mixer or an icon's own controller either, because a controller accumulates
+  yaw for the life of the pack and `start: continue` (§12.4) would notice the
+  minutes a device spent the wrong way up. `controls.update()` and the draw
+  still run, so the frame a visitor comes back to is correct.
+- The runtime call is **`hold(on)`, not `pause()`**: `pause()`'s partner
+  `play()` restarts a phase that has already reached `end: hold`, which is the
+  last thing a returning visitor should see. While held,
+  `viewer.sequence.playing` is `false` and `viewer.sequence.held` is `true`;
+  `time`, `step` and `phase` are untouched.
+- The glyph is **inline SVG/CSS, no asset**, and holds still (at a static
+  angle) under `prefers-reduced-motion` rather than disappearing — the visitor
+  still has to be told to turn the device.
+- **`?orientation=`** (§4) is the viewer-level override. `any` reviews a locked
+  pack the other way up; naming an orientation applies a lock to a sequence
+  that declared none.
+- The same curtain carries the loading state (§7). They are tracked
+  independently and the more urgent reason wins, because they genuinely
+  overlap: a phone held the wrong way while a pack is still loading needs the
+  rotate prompt, not a pulse.
+
+Measured on a pack declaring `orientation: portrait`, driven through
+`viewer.devStage.flip()` (the same accessor a real rotation changes):
+
+| Moment | stage | `curtain` | `playing` | `time` | `step` |
+|---|---|---|---|---|---|
+| playing, portrait | 375x812 portrait | down | `true` | 1.4020 | one |
+| flipped | 812x375 landscape | up, reason `orientation` | `false` | 1.4020 | one |
+| 3 s later, still flipped | 812x375 | up | `false` | **1.4020** | one |
+| flipped back | 375x812 portrait | down | `true` | **1.4020** | one |
+| 500 ms after that | 375x812 | down | `true` | 1.9028 | one |
+
+The aspect-ratio path was confirmed separately with **no emulation at all**, by
+resizing a desktop window: 900x814 (landscape) held the sequence with the glyph
+showing and `time` pinned at 0 across 3 s; resizing to 420x900 lifted the
+curtain and it played on.
+
+### 12.15 Portrait sizing — `portrait:` per element
+
+```yaml
+slot: { type: slots, count: 3, top: 0.13, size: 0.07,
+        portrait: { size: 0.12, top: 0.11 } }
+cta:  { type: button, top: 0.900, size: 0.055,
+        portrait: { size: 0.085, top: 0.88 } }
+```
+
+**Why it is needed.** Overlay elements are sized in **vmin** while the 3D icon
+is framed against stage **HEIGHT** (`framing.heightFraction` → camera distance
+through the vertical FOV). At 1280x800 vmin *is* the height and the two agree
+exactly; at 375x812 they diverge by **2.2x**, which is why a slot row and a
+call-to-action authored on a desktop read as specks on a phone.
+
+- The override applies when the stage is **taller than it is wide** — the same
+  aspect-ratio source §12.14 uses — and is re-evaluated on every resize and
+  orientation change. The per-frame render pass already runs, so this rides
+  along and costs nothing when nothing changed.
+- Only **placement** may be overridden: `top`, `left`, `size`, `gap`, `ring`,
+  `weight`, `tracking`. `type`, `text`, `persist`, `count` and the colours are
+  the element's identity, and an override able to change those would be a
+  second element wearing the same name. Anything else is a load-time error
+  naming the key.
+- There is no `landscape:` block: the base declaration **is** the landscape
+  case.
+- **Text keeps its vmin size by default.** The real constraint on a line of
+  type is wrapping, and a line that fits a landscape desktop column usually
+  fits a phone one; move its `top` instead, to make room for what grew above.
+- **Do NOT auto-derive a correction factor.** The right mobile proportions are
+  a design decision, not arithmetic — the viewer will never guess them for you.
+
+Measured on the example pack. The A/B below is at an identical `--vmin` of
+**3.75 px** (375 is the shorter side either way up), so the only variable is the
+override:
+
+| | 1280x800 landscape | 375x812 portrait (override) | 812x375 landscape (base, same vmin) |
+|---|---|---|---|
+| slot ring | 60.00 x 60.00 px, top 14% | **45.00 x 45.00 px, top 11%** | 28.13 x 28.13 px, top 14% |
+| slot font | 60 px | 45 px | 28.125 px |
+| CTA box | 75.41 x 60.78 px, top 90.5% | **54.78 x 44.38 px, top 88%** | 34.80 x 28.13 px, top 90.5% |
+| CTA font | 44 px | 31.875 px | 20.625 px |
+| `line1` font | 40 px | 18.75 px (unchanged by the override) | 18.75 px |
+| `line1` top | 73.5% | **70%** | 73.5% |
+
+### 12.16 Deliberately not supported
 
 Keyframes beyond `[from, to]`; `shift`/`scale` on 2D elements; a `background`
 target; a stateful spring that survives being re-disturbed mid-return (`rest:`
   restarts its tween; the curve may be a real spring, but the solver is not
   carried across gestures) (`rest:` is a tween with an `outBack`-style
-ease, §12.12); responsive variants; *taps* on the icon (the canvas answers
-drags, and routes them by hit test — §12.12); a `goto <step>` verb (steps advance in order, or
-restart); restoring a landed 3D object across a reload (a resumed ring shows
-its glyph); any URL parameter — a sequence arrives only inside a pack. If a
-request needs one of these, say so rather than approximating it.
+ease, §12.12); a `landscape:` block (the base declaration IS the landscape
+case — §12.15) or any responsive variant beyond `portrait:`'s placement keys;
+an auto-derived phone correction factor (§12.15); a swipe DOWN, or a swipe
+bound to anything but the step's own call-to-action (§12.13); forcing a device
+to rotate (§12.14); a progress bar on the loading curtain (§7); *taps* on the
+icon (the canvas answers drags, and routes them by hit test — §12.12); a
+`goto <step>` verb (steps advance in order, or restart); restoring a landed 3D
+object across a reload (a resumed ring shows its glyph); any URL parameter
+carrying choreography — a sequence arrives only inside a pack, though
+`?orientation=` overrides one field of it (§4). If a request needs one of
+these, say so rather than approximating it.
 
 ---
 
@@ -1664,12 +2033,13 @@ CONTRIBUTING.md                background notes for a human contributor (not rul
   skills/…                     repeatable authoring workflows
 ```
 
-`index.html` is ~1,100 lines and, with `sequence.js`, is where all application
+`index.html` is ~1,300 lines and, with `sequence.js`, is where all application
 logic lives. Its sections are marked with `// --- name ---` banner comments;
-navigate by those. In rough order: renderer/scene/camera → background layer →
-model + pivot → sidecar → sidecar linter → sidecar editor UI → components →
-sequences → icon packs / zip mode → zip loading → model loading → UI → render
-loop.
+navigate by those. In rough order: URL parameters → stage → renderer/scene/camera
+→ background layer → curtain → input policy → orientation lock → `?dev=mobile`
+control bar → model + pivot → sidecar → sidecar linter → sidecar editor UI →
+components → sequences → icon packs / zip mode → zip loading → model loading →
+UI → render loop.
 
 Where to look when the docs above are not enough:
 
@@ -1681,6 +2051,9 @@ Where to look when the docs above are not enough:
 | How is my zip unpacked and served? | `loadZipFile()` in `index.html`, plus `sw.js` |
 | How is my sequence compiled and played? | `createSequence()` in `sequence.js`; `startSequence()` / the render loop in `index.html` |
 | How does an icon get sent into a slot, and how is a glyph made? | `makeSequenceHost()` in `index.html` — `planMove()`, `iconRadius()`, `setFrozen()`, `glyphFor()` |
+| How big is the picture, and which way up? | the `stage` accessor + `measureStage()` / `applyStage()` in `index.html` (§4) |
+| What happens to zoom / drag / swipe? | `applyInput()` in `index.html`; `readInput()`, `inputNow()` and `trySwipe()` in `sequence.js` (§12.13) |
+| Who owns the curtain and the rotation lock? | `curtain` and `evaluateOrientation()` in `index.html` (§7, §12.14) |
 | What does the viewer support at all? | `README.md`, and §11 above for what it does not |
 
 ---

@@ -1,6 +1,6 @@
 ---
 name: author-sequence
-description: Write, tune, validate, and verify a sequence.yml for an icon pack — the YAML file that choreographs how an icon ENTERS (3D fade/scale/rise on a wrapper, 2D copy lines with blur + wipe, a call-to-action with a glow, a row of slots), and optionally a multi-step tap-advanced FLOW that sends each icon into a slot and brings the next one in behind it, with opt-in resume. Timed in seconds with labels, stagger, and named easings, played by the viewer through a seek-driven Anime.js timeline. Use when asked to add, change, retime, or debug an entrance, copy reveal, call-to-action, collect flow, or slot row in a pack. Never for spin or camera — those are out of scope by design.
+description: Write, tune, validate, and verify a sequence.yml for an icon pack — the YAML file that choreographs how an icon ENTERS (3D fade/scale/rise on a wrapper, 2D copy lines with blur + wipe, a call-to-action with a glow, a row of slots), and optionally a multi-step tap- or swipe-advanced FLOW that sends each icon into a slot and brings the next one in behind it, with opt-in resume. Also declares what a finger may do (input: zoom/drag/swipe), the orientation the piece was composed for (an advisory rotation prompt), and per-element portrait sizing. Timed in seconds with labels, stagger, and named easings, played by the viewer through a seek-driven Anime.js timeline. Use when asked to add, change, retime, or debug an entrance, copy reveal, call-to-action, collect flow, slot row, swipe, rotation lock, or phone layout in a pack. Never for spin or camera moves — those are out of scope by design.
 ---
 
 # Authoring a sequence
@@ -28,7 +28,13 @@ Say no (and say why) rather than approximating, if the request is any of:
 - **Keyframes** (more than `[from, to]`), a **physical spring solver**
   (`rest:` is a tween with an ease — §12.12), **background fades**, a
   **`goto <step>`** verb, **going backwards** through a flow, or restoring a
-  landed 3D object across a reload. `AGENT.md` §12.13.
+  landed 3D object across a reload. `AGENT.md` §12.16.
+- **"Force the phone into portrait."** No web page can turn a device;
+  `screen.orientation.lock()` needs fullscreen and does not exist in mobile
+  Safari. `orientation:` (§12.14) prompts — curtain, rotate glyph, sequence
+  held — and that is the honest ceiling. Say so rather than implying more.
+- **"Work out the phone sizes for me."** `portrait:` (§12.15) takes the numbers
+  a designer chose. There is deliberately no derived correction factor.
 
 Everything else — an entrance, copy, a call-to-action, slots, a collect flow,
 retiming — is exactly what it is for.
@@ -56,15 +62,22 @@ ease:
   leave:   &ease-leave   inQuad
 requires:
   icon.fade: { degrade: scale-only }    # the only capability + degrade today
+input:                                  # what a finger may do (§12.13). These
+  zoom: false                           # ARE the defaults — write them to be read
+  drag: icon                            # icon | camera | none
+  swipe: up                             # up | none — fires the step's own CTA
+orientation: any                        # portrait | landscape | any (§12.14)
 stage:                                  # every target a track may name
   hud:
-    slot:  { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.45 }
+    slot:  { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.45,
+             portrait: { size: 0.12, top: 0.11 } }     # §12.15
   icon:
     ref: current                        # a flow requires `current`
   overlay:
     line1: { type: text, top: 0.735, size: 0.05, weight: 700, tracking: 0.12 }
     line2: { type: text, top: 0.805, size: 0.05, weight: 700, tracking: 0.12 }
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: false }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: false,
+             portrait: { size: 0.085, top: 0.88 } }
 steps:
   - id: one
     icon: twist
@@ -210,6 +223,37 @@ Checklist for a flow:
   out and nothing is stored at all. Do not add it "just in case" — this is a
   public tool and a visitor's browser is not scratch space.
 
+## Step 3b — input, orientation, and the phone layout
+
+Three declarations, all optional, all with sane defaults. Write them when they
+matter and leave them out when they do not.
+
+- **`input:`** (§12.13) — `zoom` (default **false**: a pack composes a fixed
+  frame, and a camera dolly is not part of it), `drag` (`icon` / `camera` /
+  `none`), `swipe` (`up` / `none`, or the long form
+  `{ dir, ratio, distance, time }`). Any step may override any of it.
+  A swipe fires the **same verb** the call-to-action's tap does, through the
+  same guard, and only when one is actually live — so a swipe mid-transition or
+  on a step with no `advance` does nothing. Do not invent a second gesture
+  binding; there is exactly one.
+- **`orientation:`** (§12.14) — `portrait`, `landscape`, or `any` (default).
+  On a mismatch the viewer curtains the stage, shows a rotate glyph and HOLDS
+  the sequence; it resumes at the same time and step. **Advisory only.** Decide
+  by aspect ratio is the viewer's job, not yours; you only declare the intent.
+  A pack meant to be shown in a desktop window should say `any` (or say
+  nothing) — a `portrait` declaration will curtain a laptop.
+- **`portrait:`** (§12.15) — per element, overriding `top`, `left`, `size`,
+  `gap`, `ring`, `weight`, `tracking` when the stage is taller than wide.
+  Needed because overlay type is sized in vmin while the icon is framed against
+  stage height: identical at 1280x800, **2.2x apart** at 375x812. Leave text
+  sizes alone by default and move their `top` instead — wrapping, not height,
+  is what constrains a line of copy.
+
+Review all three with **`?dev=mobile`** (§4), which gives a phone-sized
+letterboxed stage in a desktop window, a button to flip its orientation, and
+the wheel mapped onto the swipe gesture. It drives the same accessor a real
+device does, so what you see is what a phone does.
+
 ## Step 4 — the fade
 
 - Icons built from `MeshStandardMaterial` / `MeshPhysicalMaterial` /
@@ -234,7 +278,9 @@ interpreter that has it (e.g. `/usr/local/bin/python3` on many Macs, or
 `pip install pyyaml`). Expect `note   sequence.yml: sequence structure OK`.
 Exit 1 with a named step and track on an undeclared target, a `to:` that names
 nothing, an unknown landing mode or verb, a step naming an icon the pack does
-not have, an unknown label, a bad ease, or a wrong channel.
+not have, an unknown label, a bad ease, a wrong channel, an `input.drag` /
+`input.swipe` / `orientation` value the viewer does not know, or a `portrait:`
+key that is not a placement key.
 
 ## Step 6 — verify in the browser, deterministically
 
@@ -308,10 +354,30 @@ localStorage.getItem(s.storageKey) === saved;   // true — the transport must n
 // then: push the stored `t` back past `minutes`, reload, assert a clean step 0
 ```
 
-Check the phone layout too (emulate ~375 px wide): `top`/`size` are viewport
+Input, orientation and the phone layout — load with `?dev=1,mobile`:
+
+```js
+const v = window.viewer, s = v.sequence;
+s.input;                                     // the policy resolved for the step showing now
+[v.controls.enableZoom, v.controls.enableRotate];
+v.stage;                                     // what the app is composing against
+v.devStage.size; v.devStage.flip();          // flip the simulated orientation
+v.orientation;                               // { stage, want, held }
+v.curtain;                                   // { up, reason }
+// a rotation lock must FREEZE, not skip:
+v.devStage.flip(); const t = s.time;
+// …wait several seconds…
+[s.playing, s.time === t];                   // [false, true]
+v.devStage.flip(); s.time === t;             // true — it resumes where it stopped
+// portrait sizing, A/B at the same --vmin:
+document.querySelector('#fg .fg-slot').getBoundingClientRect().width;
+```
+
+Check the phone layout at ~375 px wide either way: `top`/`size` are stage
 fractions, so copy that fits a desktop may wrap or crowd the icon on a phone,
 and the ring row can end up under the viewer's own compact HUD. The `fit`
-ratio should be identical at both sizes — measure it.
+ratio should be identical at both sizes — measure it. Measure with
+`viewer.stage`, never `innerWidth`/`innerHeight` (§10.14).
 
 ## Step 7 — package and hand over
 

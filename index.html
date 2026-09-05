@@ -12,21 +12,39 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     color: #cfd6ea;
   }
+  /* --- the stage -------------------------------------------------------------
+     Everything the app COMPOSES lives in here: the backdrop, the canvas, the
+     overlay and the curtain. It fills the window normally; ?dev=mobile gives it
+     a fixed phone-sized box, letterboxed on the body's own ground, so a
+     portrait layout and a rotation lock can be reviewed on a desktop.
+     Nothing downstream measures the WINDOW — every consumer reads the `stage`
+     accessor in the module below — so the emulator and a real device drive one
+     code path instead of two that can drift apart.
+     `--vmin` is the overlay's type unit. It is 1vmin here (identical to the
+     literal vmin the sequence runtime used to write), and the emulator
+     overrides it with the emulated stage's own px value. That is the whole
+     reason a phone layout can be judged in a desktop window. */
+  #stage { position: fixed; inset: 0; overflow: hidden; --vmin: 1vmin; }
+  body.devstage #stage {
+    inset: auto; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1px #2a3560, 0 24px 60px #000a;
+  }
   /* Backdrop is a 2D layer behind the transparent canvas (never scene geometry),
      so camera moves can't shift it — the same layering a real page uses. */
-  #bg { position: fixed; inset: 0; background: center / cover no-repeat; }
-  #app { position: fixed; inset: 0; }
+  #bg { position: absolute; inset: 0; background: center / cover no-repeat; }
+  #app { position: absolute; inset: 0; }
   canvas { display: block; }
   /* Foreground overlay: 2D copy and calls-to-action a pack's sequence.yml draws
      ABOVE the canvas (real DOM text — selectable, accessible — never canvas).
      Click-through by default so the icon can still be dragged; only elements a
      sequence binds an action to take pointer events. Emptied on unload. */
-  #fg { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #fg { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
   #fg .fg-el {
     position: absolute; transform: translate(-50%, -50%);
     /* max-content: an absolutely-positioned box at left:50% would otherwise
-       shrink-wrap to the remaining half of the viewport and wrap early. */
-    width: max-content; max-width: 92vw;
+       shrink-wrap to the remaining half of the stage and wrap early.
+       92% (not 92vw) so an emulated phone stage clamps copy to the STAGE. */
+    width: max-content; max-width: 92%;
     text-align: center; white-space: pre-wrap; line-height: 1.15;
     color: #f2f5ff; --glow: #f2f5ff;
     text-shadow: 0 2px 12px #0008;
@@ -66,6 +84,69 @@
     border: .12em solid #e9e3f4cc; background: transparent; box-sizing: border-box;
   }
   #fg .fg-pip.on { background: #e9e3f4; box-shadow: 0 0 .6em #e9e3f499; }
+
+  /* --- the curtain -----------------------------------------------------------
+     ONE opaque layer over the stage, with a REASON and an animation slot. Two
+     users today (loading, and the rotation lock's rotate prompt); more can be
+     added by giving them a reason rather than a second layer.
+     It is in the initial HTML and opaque before the first paint, because a
+     curtain added once JS boots only moves the flash earlier — it does not
+     remove it. Everything below is a DEFAULT a pack may restyle through
+     `loading:` in icons.yml (AGENT.md §7). */
+  #curtain {
+    position: absolute; inset: 0; z-index: 8;
+    display: flex; align-items: center; justify-content: center;
+    background: #08080a;
+  }
+  /* An author rule, so it beats the UA's [hidden] on a flex element. */
+  #curtain[hidden] { display: none !important; }
+  /* The quiet default: a soft pulsing disc. Deliberately dumb — no spinner
+     library and no fake progress bar, because there is no progress to report,
+     only a wait. A pack's `loading.image` becomes this element's background. */
+  #curtainMark {
+    width: 14vmin; height: 14vmin; max-width: 96px; max-height: 96px;
+    border-radius: 50%;
+    background: center / contain no-repeat;
+    box-shadow: inset 0 0 0 .9vmin #cfd6ea26;
+    animation: curtain-pulse 1.7s ease-in-out infinite;
+  }
+  @keyframes curtain-pulse {
+    0%, 100% { opacity: .35; transform: scale(.94); }
+    50%      { opacity: .95; transform: scale(1); }
+  }
+  #curtain[data-anim="none"] #curtainMark { animation: none; opacity: .8; }
+  /* The rotate prompt: NO TEXT, by decision — a glyph reads in every language,
+     and there is nothing to say that the picture does not. Inline SVG/CSS, no
+     asset to ship. Shown only for the orientation reason. */
+  #rotateGlyph { display: none; width: 26vmin; height: 26vmin; max-width: 160px; max-height: 160px; }
+  #curtain[data-reason="orientation"] #curtainMark { display: none; }
+  #curtain[data-reason="orientation"] #rotateGlyph { display: block; }
+  #rotateGlyph .phone { transform-origin: 32px 32px; animation: rotate-hint 2.6s ease-in-out infinite; }
+  @keyframes rotate-hint {
+    0%, 22%   { transform: rotate(0deg); }
+    45%, 78%  { transform: rotate(-90deg); }
+    100%      { transform: rotate(0deg); }
+  }
+  /* Reduced motion holds a STATIC glyph rather than dropping the prompt: the
+     visitor still has to be told to turn the device. */
+  @media (prefers-reduced-motion: reduce) {
+    #curtainMark { animation: none; opacity: .8; }
+    #rotateGlyph .phone { animation: none; transform: rotate(-45deg); }
+  }
+
+  /* --- ?dev=mobile control bar ------------------------------------------------
+     Reports the stage the app actually sees and flips its orientation. Outside
+     #stage and, like the DEV badge, alive in bare mode — that is exactly when
+     you cannot otherwise tell what you are looking at. */
+  #devbar {
+    position: fixed; left: 8px; bottom: 8px; z-index: 999;
+    display: flex; gap: 6px; align-items: center;
+    font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #0d1120e8; border: 1px solid #2a3560; border-radius: 8px; padding: 5px 6px;
+  }
+  #devbar[hidden] { display: none !important; }
+  #devbar button, #devbar select { font-size: 11px; padding: 4px 6px; border-radius: 6px; }
+  #devSize { color: #ffd166; letter-spacing: .06em; }
 
   #hud {
     position: fixed; top: 0; left: 0; right: 0;
@@ -188,9 +269,27 @@ body.devmode::after {
 </style>
 </head>
 <body>
-<div id="bg"></div>
-<div id="app"></div>
-<div id="fg"></div>
+<!-- The stage holds everything the app composes. The curtain is INSIDE it, and
+     opaque in the initial HTML: it has to be up before the first paint, or the
+     flash it exists to hide simply happens sooner. JS lowers it as soon as
+     there is something to see. -->
+<div id="stage">
+  <div id="bg"></div>
+  <div id="app"></div>
+  <div id="fg"></div>
+  <div id="curtain" data-reason="loading">
+    <div id="curtainMark"></div>
+    <!-- A phone turning, and an arrow saying which way. No text: see the CSS. -->
+    <svg id="rotateGlyph" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <path d="M32 6 A26 26 0 0 1 55 20" stroke="#8fa1d8" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M56 12 L56 21 L47 21" stroke="#8fa1d8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <g class="phone">
+        <rect x="22" y="14" width="20" height="36" rx="3.5" stroke="#cfd6ea" stroke-width="2.5"/>
+        <line x1="29" y1="46" x2="35" y2="46" stroke="#cfd6ea" stroke-width="2.5" stroke-linecap="round"/>
+      </g>
+    </svg>
+  </div>
+</div>
 
 <div id="hud">
   <!-- A row's value is its identity, not its path: the same dragon appears
@@ -252,6 +351,14 @@ body.devmode::after {
 <div id="status">Loading…</div>
 <div id="drop">Drop .glb, sidecar .json, component .js, icon-pack .zip, or a background image anywhere</div>
 
+<!-- ?dev=mobile only. It reports the stage the app is actually measuring, so a
+     measurement can never be attributed to the wrong viewport. -->
+<div id="devbar" hidden>
+  <span id="devSize">—</span>
+  <select id="devPreset" title="Emulated device size"></select>
+  <button id="devFlip" title="Flip the simulated orientation">⟳</button>
+</div>
+
 <script type="importmap">
 {
   "imports": {
@@ -276,10 +383,114 @@ const app = document.getElementById('app');
 const status = document.getElementById('status');
 const $ = id => document.getElementById(id);
 
+// --- URL parameters ------------------------------------------------------
+// Read once, here, because the stage below needs ?dev= before anything is
+// sized. The rest of the parameters are consumed by the boot block at the
+// bottom of this file (AGENT.md §4).
+const params = new URLSearchParams(location.search);
+// ?ui=0 (also: none/off/false/hide) strips the viewer's own controls, leaving
+// just the pack's own picture. Anything else, or absent, keeps the full UI.
+const UI_OFF = /^(0|none|off|false|hide)$/i;
+if (UI_OFF.test((params.get('ui') || '').trim())) document.body.classList.add('bare');
+
+// ?dev=… — author mode. It cannot disable caching wholesale: index.html and the
+// statically imported vendor modules are already fetched before any of this
+// runs, and only a no-store SERVER reaches those (see .claude/launch.json's
+// "viewer-dev"). What it does reach is everything loaded after boot, plus the
+// saved resume state — the other thing that quietly serves you yesterday's
+// answer.
+//   ?dev=1        sequence.js always re-fetched; a pack's saved step is ignored
+//   ?dev=all      …and the pack loader and every icon module too. That
+//                 re-downloads the whole pack on every reload — megabytes — so
+//                 it is opt-in.
+//   ?dev=mobile   …plus the phone-sized emulated stage (see `stage` below).
+// The flags COMPOSE, comma-separated: ?dev=mobile,all is both.
+const devFlags = new Set((params.get('dev') || '').trim().toLowerCase().split(',').map(s => s.trim()).filter(Boolean));
+const DEV = devFlags.size > 0 && ![...devFlags].every(f => /^(0|off|false|no)$/.test(f));
+const DEV_ALL = DEV && devFlags.has('all');
+const DEV_MOBILE = DEV && devFlags.has('mobile');
+// A token, not `cache: 'reload'`: a dynamic import() takes no cache option, and
+// a module is only re-evaluated when its URL itself differs.
+const devBust = () => (DEV ? `?dev=${Date.now()}` : '');
+if (DEV) {
+  document.body.classList.add('devmode');
+  console.info(`[viewer] dev mode${DEV_ALL ? ' (all)' : ''}${DEV_MOBILE ? ' (mobile stage)' : ''}: sequence runtime uncached, saved step ignored${DEV_ALL ? ', pack modules uncached' : ''}. index.html and vendor/ still come from the browser cache — use the viewer-dev server for those.`);
+}
+if (DEV_MOBILE) document.body.classList.add('devstage');
+
+// --- stage (the box the app composes against) ----------------------------
+// ONE source for "how big is the picture, and which way up is it". The
+// renderer size, the camera aspect, the ring anchoring, the pointer hit test,
+// the glyph capture, the drag-to-turn distance and a sequence's own portrait
+// overrides all read THIS, and nothing downstream reads innerWidth /
+// innerHeight. That is what lets ?dev=mobile substitute a phone-sized box and
+// still exercise the very code paths a real device takes — a lock or a layout
+// that only worked in the emulator would be worse than none.
+//
+// ORIENTATION IS DECIDED BY ASPECT RATIO, never by screen.orientation or the
+// Screen Orientation API. A resized desktop window, the emulator and a real
+// phone then behave identically, and mobile Safari has no such API to read
+// anyway (which is also why the rotation lock is advisory — §12.14). A square
+// stage counts as landscape.
+const stageEl = $('stage');
+const stage = {
+  w: 1, h: 1, left: 0, top: 0,
+  get portrait() { return this.h > this.w; },
+  get orientation() { return this.h > this.w ? 'portrait' : 'landscape'; },
+  get emulated() { return DEV_MOBILE; },
+};
+// Common phone/tablet boxes. The first is the reference portrait phone the
+// overlay sizing was measured against.
+const DEV_PRESETS = [[375, 812], [390, 844], [414, 896], [360, 800], [768, 1024]];
+const devStage = { w: 375, h: 812, flipped: false };
+const stageWatchers = [];
+const onStage = fn => { stageWatchers.push(fn); };
+
+function measureStage() {
+  const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+  if (DEV_MOBILE) {
+    const [ww, hh] = devStage.flipped ? [devStage.h, devStage.w] : [devStage.w, devStage.h];
+    // CLAMPED to the window, never scaled with a transform. A scaled stage
+    // would put pointer coordinates and the overlay's own client rects in a
+    // different space from the stage the app measures, and two coordinate
+    // systems is precisely the class of bug this accessor exists to prevent.
+    // The devbar reports what the stage actually ended up being.
+    stage.w = Math.min(ww, vw); stage.h = Math.min(hh, vh);
+    stageEl.style.width = `${stage.w}px`;
+    stageEl.style.height = `${stage.h}px`;
+    // The overlay's type unit follows the emulated box, not the window.
+    stageEl.style.setProperty('--vmin', `${Math.min(stage.w, stage.h) / 100}px`);
+  } else {
+    stage.w = vw; stage.h = vh;
+    stageEl.style.width = stageEl.style.height = '';
+    stageEl.style.removeProperty('--vmin');   // back to the stylesheet's 1vmin
+  }
+  const r = stageEl.getBoundingClientRect();
+  stage.left = r.left; stage.top = r.top;
+  return stage;
+}
+// Client (window) coordinates -> stage coordinates. Pointer events are always
+// in window space; everything the app measures is in stage space.
+const toStageX = cx => cx - stage.left;
+const toStageY = cy => cy - stage.top;
+
+// Re-measure and push the new stage everywhere: the renderer, the camera, and
+// every watcher (the orientation lock, the devbar readout, a live sequence's
+// portrait overrides). ONE entry point, so a window resize, a device rotation
+// and the emulator's own controls cannot possibly diverge.
+function applyStage() {
+  measureStage();
+  camera.aspect = stage.w / stage.h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(stage.w, stage.h);
+  for (const fn of stageWatchers) { try { fn(stage); } catch (e) { console.error('stage watcher:', e); } }
+}
+
 // --- renderer / scene / camera -------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
+measureStage();
+renderer.setSize(stage.w, stage.h);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;   // needed for glass to look right
 renderer.toneMappingExposure = 1.0;
 app.appendChild(renderer.domElement);
@@ -290,12 +501,17 @@ const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 100);
+const camera = new THREE.PerspectiveCamera(40, stage.w / stage.h, 0.01, 100);
 camera.position.set(0, 0.6, 3);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enablePan = false;
+// `enableZoom` stays at OrbitControls' own default (true) for a plain model.
+// A pack SEQUENCE declares what it wants with `input:` (§12.13) — until this
+// was added, nothing in the app referenced enableZoom at all, so scroll and
+// pinch dollied the camera even in pack mode, where a fixed composed frame is
+// the whole point. Nobody had chosen that.
 
 // A subtle key light on top of the IBL, for a little sparkle.
 const key = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -327,6 +543,120 @@ $('starsToggle').onchange = e => { bgState.stars = e.target.checked; applyBackgr
 $('bgChip').onclick = () => setCustomBackground(null, '');
 applyBackground();
 
+// --- the curtain -------------------------------------------------------------
+// One opaque layer over the stage, raised for a REASON. It is already up in the
+// initial HTML (a curtain added after JS boots only moves the flash earlier),
+// and it comes down when the first thing worth seeing is posed.
+//
+// Two reasons today. They are tracked independently and the layer shows the
+// most urgent one, because they genuinely overlap: a phone held the wrong way
+// while a pack is still loading needs the rotate prompt, not a pulse.
+const curtainEl = $('curtain'), curtainMark = $('curtainMark');
+const curtainWhy = new Set(['loading']);
+const CURTAIN_ORDER = ['orientation', 'loading'];
+function curtainSync() {
+  const why = CURTAIN_ORDER.find(r => curtainWhy.has(r)) ?? null;
+  if (why) curtainEl.dataset.reason = why;
+  curtainEl.hidden = !why;
+}
+const curtain = {
+  raise(why) { curtainWhy.add(why); curtainSync(); },
+  clear(why) { curtainWhy.delete(why); curtainSync(); },
+  get up() { return !curtainEl.hidden; },
+  get reason() { return curtainEl.hidden ? null : curtainEl.dataset.reason; },
+  // A pack's `loading:` block from icons.yml (AGENT.md §7). Deliberately three
+  // knobs — a ground colour, an image and whether it moves. No spinner, no
+  // progress bar: there is no progress to report, only a wait.
+  appearance(decl) {
+    curtainEl.style.background = decl?.ground ? String(decl.ground) : '';
+    curtainMark.style.backgroundImage = decl?.image ? `url("${decl.image}")` : '';
+    // With an image of its own the default's inset ring would frame it oddly.
+    curtainMark.style.boxShadow = decl?.image ? 'none' : '';
+    curtainEl.dataset.anim = decl?.animation === 'none' ? 'none' : 'pulse';
+  },
+};
+
+// --- input policy (a sequence's `input:` block — AGENT.md §12.13) ------------
+// zoom / drag / swipe are DECLARED rather than accumulated. Before this they
+// were scattered and partly accidental: `enableZoom` was referenced nowhere, so
+// a scroll dollied the camera even in pack mode, and camera rotation was
+// switched off unconditionally the moment a sequence attached its router.
+const INPUT_OFF = { zoom: true, drag: 'camera' };   // no sequence: the viewer's own defaults
+function applyInput(p) {
+  controls.enableZoom = !!p.zoom;
+  controls.enableRotate = p.drag === 'camera';
+  // The status line says what a gesture does, so it has to follow a per-step
+  // override rather than describing the pack once at load.
+  refreshStatus();
+}
+
+// --- orientation lock (advisory — AGENT.md §12.14) ---------------------------
+// A sequence may declare the orientation it was composed for. On a mismatch the
+// curtain goes up, the rotate glyph plays, and the sequence is HELD — it must
+// not walk on to the next step behind an opaque layer.
+//
+// It is ADVISORY and cannot be anything else. screen.orientation.lock() needs
+// fullscreen and does not exist in mobile Safari at all, so there is no code
+// path here that turns a device: we detect, and we prompt. iOS Safari is the
+// case that shapes the design, not an afterthought.
+//
+// The decision is `stage.orientation` — an ASPECT RATIO — so a resized desktop
+// window, ?dev=mobile and a real phone all behave identically.
+const ORIENTATIONS = ['portrait', 'landscape', 'any'];
+// ?orientation= is the viewer-level override: it wins over whatever the pack
+// declared, and `any` is how you switch the lock off to review the other way up.
+const orientParam = (params.get('orientation') || '').trim().toLowerCase();
+const orientOverride = ORIENTATIONS.includes(orientParam) ? orientParam
+  : (/^(0|off|false|no)$/.test(orientParam) ? 'any' : null);
+let seqOrientation = 'any';     // what the loaded sequence asked for
+let orientationHold = false;    // the render loop's gate
+function wantedOrientation() { return orientOverride ?? seqOrientation; }
+function evaluateOrientation() {
+  const want = wantedOrientation();
+  const bad = want !== 'any' && stage.orientation !== want;
+  if (bad === orientationHold) return;
+  orientationHold = bad;
+  if (bad) curtain.raise('orientation'); else curtain.clear('orientation');
+  // hold(), not pause(): pause()'s partner play() restarts a phase that has
+  // reached `end: hold`, and coming back from a rotation must resume at exactly
+  // the same time and step.
+  component?.seq?.hold?.(bad);
+  syncSequenceUI();
+}
+function setSequenceOrientation(v) { seqOrientation = v ?? 'any'; evaluateOrientation(); }
+onStage(evaluateOrientation);
+
+// --- ?dev=mobile control bar -------------------------------------------------
+// It flips the SIMULATED orientation through the same accessor a real device
+// changes (`stage`), so nothing downstream can tell the two apart.
+if (DEV_MOBILE) {
+  const bar = $('devbar'), sizeEl = $('devSize'), preset = $('devPreset');
+  bar.hidden = false;
+  for (const [w, h] of DEV_PRESETS) {
+    const o = document.createElement('option');
+    o.value = `${w}x${h}`; o.textContent = `${w}×${h}`;
+    preset.appendChild(o);
+  }
+  preset.value = `${devStage.w}x${devStage.h}`;
+  const report = () => { sizeEl.textContent = `${stage.w}×${stage.h} ${stage.orientation}`; };
+  preset.onchange = () => {
+    const [w, h] = preset.value.split('x').map(Number);
+    devStage.w = w; devStage.h = h;
+    applyStage();
+  };
+  $('devFlip').onclick = () => { devStage.flipped = !devStage.flipped; applyStage(); };
+  onStage(report);
+  report();   // the bar has to say something before the first resize
+  // The wheel is mapped onto the SWIPE channel so the gesture can be exercised
+  // with a trackpad or a mouse. It goes through the sequence's own classifier —
+  // there is no second gesture implementation to drift out of step.
+  addEventListener('wheel', e => {
+    const r = component?.seq?.router;
+    if (!r?.wheel) return;
+    r.wheel(e.deltaY);
+  }, { passive: true });
+}
+
 // --- model + pivot ----------------------------------------------------------
 // The model is parented under a pivot group at the world origin. The spin is
 // applied to the pivot, so wherever we position the model inside it defines
@@ -343,31 +673,6 @@ let animCount = 0;       // how many clips we started on it (the mixer's own
                          // action list is private, so we keep the count)
 let baseLabel = '';
 
-const params = new URLSearchParams(location.search);
-// ?ui=0 (also: none/off/false/hide) strips the viewer's own controls, leaving
-// just the pack's own picture. Anything else, or absent, keeps the full UI.
-const UI_OFF = /^(0|none|off|false|hide)$/i;
-if (UI_OFF.test((params.get('ui') || '').trim())) document.body.classList.add('bare');
-
-// ?dev=1 — author mode. It cannot disable caching wholesale: index.html and the
-// statically imported vendor modules are already fetched before any of this
-// runs, and only a no-store SERVER reaches those (see .claude/launch.json's
-// "viewer-dev"). What it does reach is everything loaded after boot, plus the
-// saved resume state — the other thing that quietly serves you yesterday's
-// answer.
-//   ?dev=1     sequence.js always re-fetched; a pack's saved step is ignored
-//   ?dev=all   …and the pack loader and every icon module too. That re-downloads
-//              the whole pack on every reload — megabytes — so it is opt-in.
-const devParam = (params.get('dev') || '').trim().toLowerCase();
-const DEV = devParam !== '' && !/^(0|off|false|no)$/.test(devParam);
-const DEV_ALL = DEV && devParam === 'all';
-// A token, not `cache: 'reload'`: a dynamic import() takes no cache option, and
-// a module is only re-evaluated when its URL itself differs.
-const devBust = () => (DEV ? `?dev=${Date.now()}` : '');
-if (DEV) {
-  document.body.classList.add('devmode');
-  console.info(`[viewer] dev mode${DEV_ALL ? ' (all)' : ''}: sequence runtime uncached, saved step ignored${DEV_ALL ? ', pack modules uncached' : ''}. index.html and vendor/ still come from the browser cache — use the viewer-dev server for those.`);
-}
 const pivotParam = (params.get('pivot') || '').split(',').map(Number);
 const manualPivot = pivotParam.length === 3 && pivotParam.every(Number.isFinite)
   ? new THREE.Vector3(...pivotParam) : null;
@@ -659,21 +964,27 @@ let dragListeners = null;
 function attachIconDrag(router) {
   detachPointer();
   detachIconDrag();
-  controls.enableRotate = false;
   const el = renderer.domElement;
-  let active = null;                    // the pointerId that owns the drag
+  let active = null;                    // the pointerId that owns the gesture
   const down = e => {
     if (e.button !== undefined && e.button !== 0) return;
     // A second finger means a pinch: give the gesture up rather than fight
     // OrbitControls for it.
     if (active !== null) { router.up(); active = null; return; }
-    if (!router.down(e.clientX, e.clientY)) return;
+    // 'grab' = an icon was hit; 'watch' = nothing was hit but the gesture is
+    // still being classified, because a SWIPE is judged by its shape and not
+    // by where it started (§12.13). Only a grab takes the pointer capture: a
+    // watch must not swallow the gesture from OrbitControls under
+    // `drag: camera`.
+    const claim = router.down(toStageX(e.clientX), toStageY(e.clientY));
+    if (!claim) return;
     active = e.pointerId;
+    if (claim !== 'grab') return;
     // Synthetic pointers (a test harness) have no capture to take, and the
     // call throws rather than no-opping.
     try { el.setPointerCapture?.(e.pointerId); } catch { /* not a real pointer */ }
   };
-  const move = e => { if (active === e.pointerId) router.move(e.clientX, e.clientY); };
+  const move = e => { if (active === e.pointerId) router.move(toStageX(e.clientX), toStageY(e.clientY)); };
   const up = e => { if (active !== null && active === e.pointerId) { router.up(); active = null; } };
   el.addEventListener('pointerdown', down);
   el.addEventListener('pointermove', move);
@@ -689,7 +1000,7 @@ function detachIconDrag() {
   el.removeEventListener('pointerup', dragListeners.up);
   el.removeEventListener('pointercancel', dragListeners.up);
   dragListeners = null;
-  controls.enableRotate = true;
+  applyInput(INPUT_OFF);   // back to the viewer's own defaults: orbit and zoom
 }
 
 function unloadComponent(reloadModel = false, keepBackground = false) {
@@ -725,11 +1036,12 @@ async function applyComponentApi(api, name) {
     // flow that swaps icons must not re-frame under the visitor.
     frameComponent(api);
   } else if (api?.material) {
-    if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; return false; }
+    if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; curtain.clear('loading'); return false; }
     current.traverse(o => { if (o.isMesh) o.material = api.material; });
     component = { name, api, kind: 'material' };
   } else {
     status.textContent = `Component ${name}: createComponent() must return { object }, { material }, or { icons }.`;
+    curtain.clear('loading');
     return false;
   }
   componentBg = api.background ?? null;   // { image?, color? } — a component may bring its backdrop
@@ -738,7 +1050,16 @@ async function applyComponentApi(api, name) {
   $('compName').textContent = name;
   $('compChip').style.display = 'inline-block';
   refreshStatus();
-  if (api.sequence && component.kind === 'object') await startSequence(component);
+  if (api.sequence && component.kind === 'object') {
+    await startSequence(component);
+    // The curtain comes down as soon as STEP 1 CAN DRAW — its t=0 pose applied
+    // — and NOT when the whole pack has finished loading. Preloading the
+    // remaining icons and capturing their glyphs carries on behind the lifted
+    // curtain (`seq.ready`), which is the difference between a first frame in
+    // a few hundred milliseconds and one in several seconds.
+    try { await component?.seq?.posed; } catch (e) { console.warn('sequence pose:', e); }
+  }
+  curtain.clear('loading');
   return true;
 }
 
@@ -842,7 +1163,12 @@ function makeSequenceHost(comp) {
   function measure(el) {
     let m = rects.get(el);
     if (m) return m;
-    const rect = el.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    // Converted to STAGE coordinates on the way in, so every consumer below
+    // (the NDC solve, the glyph crop) works in one space. A window-space rect
+    // is only correct while the stage fills the window — which ?dev=mobile
+    // deliberately breaks.
+    const rect = { left: r.left - stage.left, top: r.top - stage.top, width: r.width, height: r.height };
     let b = borders.get(el);
     if (!b || b.w !== rect.width || b.h !== rect.height) {
       const cs = getComputedStyle(el);
@@ -895,7 +1221,7 @@ function makeSequenceHost(comp) {
   // DOM ring does, instead of sliding out of it.
   function anchorWorld(h, el, fit, depth) {
     const { rect, innerPx } = measure(el);
-    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+    const vw = stage.w, vh = stage.h;
     const fwd = camera.getWorldDirection(_va);
     const ndc = _vb.set(((rect.left + rect.width / 2) / vw) * 2 - 1,
                         -((rect.top + rect.height / 2) / vh) * 2 + 1, 0.5).unproject(camera);
@@ -929,7 +1255,7 @@ function makeSequenceHost(comp) {
   // `padding` of it, and the nearest hit wins. Nothing near enough wins
   // nothing — a drag on empty canvas must rotate nothing at all.
   function hitTest(list, x, y, padding) {
-    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+    const vw = stage.w, vh = stage.h;
     const fwd = camera.getWorldDirection(_va);
     const halfFov = Math.tan((camera.fov * Math.PI / 180) / 2);
     let best = null, bestD = Infinity;
@@ -990,7 +1316,7 @@ function makeSequenceHost(comp) {
         holder.add(obj);                        // temporarily; restored in `finally`
         const boxPx = a.innerPx * GLYPH_BOX;    // the <img>'s box inside the ring
         cam = camera.clone();
-        cam.setViewOffset(Math.max(1, innerWidth), Math.max(1, innerHeight),
+        cam.setViewOffset(stage.w, stage.h,
           a.rect.left + a.rect.width / 2 - boxPx / 2,
           a.rect.top + a.rect.height / 2 - boxPx / 2, boxPx, boxPx);
         cam.updateProjectionMatrix();
@@ -1064,6 +1390,13 @@ function makeSequenceHost(comp) {
     },
     setActive, setFrozen, rest, planMove, anchor, hitTest, glyphFor, beginFrame,
     attachDrag: attachIconDrag, detachDrag: detachIconDrag,
+    // The one size/orientation source (see `stage` above). The runtime reads it
+    // for the drag-to-turn distance, the swipe threshold and its portrait
+    // overrides, so ?dev=mobile changes all three through the same accessor a
+    // real device does.
+    stage,
+    // What a step's `input:` resolves to, pushed here whenever it changes.
+    setInput: applyInput,
     dispose() {
       // Everything this host built is released here; the icon the page loaded
       // is handed back to unloadComponent() exactly as it found it.
@@ -1092,12 +1425,16 @@ function makeSequenceHost(comp) {
 async function startSequence(comp) {
   const api = comp.api, root0 = comp.root;
   root0.visible = false;   // no flash of the rest pose while the module loads
-  let seq = null;
+  let seq = null, failure = null;
   try {
     const { createSequence } = await import('./sequence.js' + devBust());
     seq = createSequence(api.sequence.doc, { ...makeSequenceHost(comp), dev: DEV });
   } catch (err) {
-    status.textContent = `${api.sequence.file}: ${err.message}`;
+    // Kept, not written straight to the status line: refreshStatus() below
+    // would erase it a few lines later, which is exactly what used to happen —
+    // a load-time sequence error was named in the console and nowhere else,
+    // while AGENT.md §9 promised the status line would carry it.
+    failure = `${api.sequence.file}: ${err.message}`;
     console.error(err);
   }
   if (component !== comp) { seq?.dispose(); return; }   // the user moved on while we loaded
@@ -1106,14 +1443,23 @@ async function startSequence(comp) {
   // when there is no sequence to hand it to.
   if (!seq) root0.visible = true;
   comp.seq = seq;
+  // The sequence's `orientation:` (and the ?orientation= override) decide
+  // whether the rotation lock is armed. Evaluated straight away, so a pack
+  // opened on a phone held the wrong way never plays a frame behind the
+  // curtain.
+  setSequenceOrientation(seq?.orientation);
+  if (orientationHold) seq?.hold?.(true);
   syncSequenceUI();
-  refreshStatus();   // a live sequence changes what a drag does (§12.12)
+  // A live sequence changes what a drag does (§12.12, §12.13). A FAILED one
+  // has only one thing worth saying, so it keeps the line.
+  if (failure) status.textContent = failure; else refreshStatus();
 }
 
 function stopSequence() {
   component?.seq?.dispose();
   if (component) component.seq = null;
   fgEl.replaceChildren();
+  setSequenceOrientation('any');
   syncSequenceUI();
 }
 
@@ -1137,6 +1483,7 @@ seqPlay.onclick = () => { const s = component?.seq; if (!s) return; s.playing ? 
 async function activateComponent(mod, name, assetPath) {
   if (typeof mod.createComponent !== 'function') {
     status.textContent = `Component ${name}: module has no createComponent() export.`;
+    curtain.clear('loading');
     return;
   }
   unloadComponent();
@@ -1145,12 +1492,14 @@ async function activateComponent(mod, name, assetPath) {
     api = await mod.createComponent({ THREE, renderer, scene, camera, assetPath });
   } catch (err) {
     status.textContent = `Component ${name} failed to start: ${err.message}`;
-    console.error(err); return;
+    console.error(err);
+    curtain.clear('loading');   // a failure must not leave an opaque page
+    return;
   }
   // Icon pack: { icons: { name: async () => api } } — dropdown swaps to the
   // pack's contents plus an "unload" entry.
   if (api?.icons && typeof api.icons === 'object' && !Array.isArray(api.icons)) {
-    await enterPack(name, api.icons);
+    await enterPack(name, api.icons, api.loading);
     return;
   }
   await applyComponentApi(api, name);
@@ -1198,9 +1547,13 @@ function enterPackMode() {
   document.body.classList.add('zipmode');
 }
 
-async function enterPack(label, icons) {
+async function enterPack(label, icons, loading) {
   const names = Object.keys(icons);
-  if (!names.length) { status.textContent = `${label}: the pack lists no icons.`; return; }
+  if (!names.length) { status.textContent = `${label}: the pack lists no icons.`; curtain.clear('loading'); return; }
+  // The pack's own `loading:` (icons.yml, §7) restyles the curtain that is
+  // ALREADY up. This runs right after the manifest parse and before a single
+  // icon is built, which is the earliest moment the pack's wishes are known.
+  if (loading) curtain.appearance(loading);
   // No zipState yet means this pack came from ?component=, with no zip involved.
   zipState = zipState ?? { source: 'pack', label, savedHTML: null, savedValue: null, icons: null };
   zipState.icons = icons;
@@ -1214,7 +1567,12 @@ async function activatePackIcon(name, picked = false) {
   status.textContent = `Loading ${name}…`;
   let api;
   try { api = await zipState.icons[name](); }
-  catch (err) { status.textContent = `Icon ${name} failed: ${err.message}`; console.error(err); return; }
+  catch (err) {
+    status.textContent = `Icon ${name} failed: ${err.message}`;
+    console.error(err);
+    curtain.clear('loading');
+    return;
+  }
   packIconPicked = picked;
   await applyComponentApi(api, name);
   packIconPicked = false;
@@ -1337,9 +1695,11 @@ function frameComponent(api) {
 
 async function loadComponentURL(path) {
   let url;
-  try { url = new URL(path, location.href); } catch { status.textContent = `Bad component path: ${path}`; return; }
+  try { url = new URL(path, location.href); }
+  catch { status.textContent = `Bad component path: ${path}`; curtain.clear('loading'); return; }
   if (url.origin !== location.origin) {
     status.textContent = 'Components only load from this site\'s own address (a relative path). Remote URLs are not allowed.';
+    curtain.clear('loading');
     return;
   }
   status.textContent = `Loading component ${path}…`;
@@ -1349,6 +1709,7 @@ async function loadComponentURL(path) {
   } catch (err) {
     status.textContent = `Could not load component ${path}: ${err.message}`;
     console.error(err);
+    curtain.clear('loading');
   }
 }
 
@@ -1374,10 +1735,18 @@ function refreshStatus() {
     ? (zipState ? ` • ${zipState.source} ${zipState.label}` : ` • component ${component.name} (${component.kind})`)
     : '';
   const shown = component?.kind === 'object' ? component.name : baseLabel;
-  // A sequence routes drags to whichever icon was actually grabbed, so an
-  // icon with no pointer handlers of its own is draggable too (AGENT.md §12.12).
-  const drag = (component?.seq || component?.api.pointer) ? 'drag to spin the icon' : 'drag to orbit';
-  status.textContent = `${shown} • ${drag}, wheel/pinch to zoom` + comp +
+  // What a gesture ACTUALLY does right now, rather than a fixed sentence. A
+  // sequence declares it (`input:`, §12.13) and routes drags to whichever icon
+  // was grabbed, so an icon with no pointer handlers of its own is draggable
+  // too (§12.12); without a sequence the viewer's own orbit-and-zoom applies.
+  const inp = component?.seq?.input;
+  const drag = inp
+    ? { icon: 'drag to spin the icon', camera: 'drag to orbit', none: 'drag does nothing' }[inp.drag]
+    : (component?.api.pointer ? 'drag to spin the icon' : 'drag to orbit');
+  const gestures = [drag];
+  if (inp?.swipe.dir === 'up') gestures.push('swipe up to advance');
+  if (inp ? inp.zoom : true) gestures.push('wheel/pinch to zoom');
+  status.textContent = `${shown} • ${gestures.join(', ')}` + comp +
     (animCount ? ` • ${animCount} embedded animation${animCount > 1 ? 's' : ''} playing` : ' • no embedded animations (spin is ours)') + sc;
 }
 
@@ -1406,6 +1775,8 @@ function setModel(gltf, label) {
   if (pendingComponentPath) {
     const p = pendingComponentPath; pendingComponentPath = null;
     loadComponentURL(p);
+  } else {
+    curtain.clear('loading');   // there is a model to see
   }
 }
 
@@ -1413,7 +1784,11 @@ function loadURL(url, label) {
   status.textContent = `Loading ${label}…`;
   loader.load(url, g => setModel(g, label),
     xhr => { if (xhr.total) status.textContent = `Loading ${label}… ${Math.round(xhr.loaded / xhr.total * 100)}%`; },
-    err => { status.textContent = `Failed to load ${label}: ${err.message ?? err}`; console.error(err); });
+    err => {
+      status.textContent = `Failed to load ${label}: ${err.message ?? err}`;
+      console.error(err);
+      curtain.clear('loading');   // show the failure, not an opaque page
+    });
 }
 
 // --- UI ----------------------------------------------------------------------
@@ -1512,6 +1887,14 @@ let pendingComponentPath = params.get('component');
   if (qs) {
     selectCustom(qs.split('/').pop(), 'URL', qs);
     loadURL(qs, qs.split('/').pop());
+  } else if (pendingComponentPath) {
+    // ?component= with no ?model=: an `{ object }` component (every pack is
+    // one) REPLACES the model outright, so loading a sample nobody will ever
+    // see is pure latency — and the swap when setModel() finally handed over
+    // was the visible blink at boot. A `{ material }` component still needs a
+    // model, and says so in the status line; pass ?model= for that case.
+    const p = pendingComponentPath; pendingComponentPath = null;
+    loadComponentURL(p);
   } else {
     const opt = modelSelect.selectedOptions[0];
     loadURL(modelSrc(opt), opt.textContent);
@@ -1522,39 +1905,62 @@ let pendingComponentPath = params.get('component');
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
-  if ((current || component?.kind === 'object') && !paused)
-    pivot.rotation.y += dt * parseFloat(speedInput.value);
-  // `frozen` is set by a sequence for an icon it has landed in a slot: it must
-  // stop being updated BEFORE its resting orientation can stick, because the
-  // icon's own controller reassigns rotation every frame.
-  try { if (!component?.frozen) component?.api.update?.(dt); } catch (e) { console.error('component update:', e); }
-  // The pack's own update runs FIRST (its controller assigns rotation), then
-  // the sequence advances the wrapper/overlay. They never share a property.
-  const seq = component?.seq;
-  if (seq) {
-    // ALWAYS, not only while playing: a held phase still has to re-anchor its
-    // landed objects to their rings (the camera and the viewport can change
-    // under a finished sequence) and still has to settle a spring-back.
-    seq.update(dt);
-    // Keep the transport honest after a programmatic seek() too (e.g. from the
-    // console); only touch the DOM when something actually changed.
-    if (seq.time !== seqUi.time || seq.playing !== seqUi.playing || seq.duration !== seqUi.duration) syncSequenceUI();
+  // NOTHING advances behind the rotation lock's curtain (§12.14). Not the
+  // sequence — it must not walk on to the next step where no one can see it —
+  // and not the turntable, the mixer or an icon's own controller either: a
+  // controller accumulates yaw for the life of the pack, and `start: continue`
+  // would notice the minutes a device spent the wrong way up. The camera and
+  // the draw still run, so the frame the visitor comes back to is correct.
+  if (!orientationHold) {
+    if ((current || component?.kind === 'object') && !paused)
+      pivot.rotation.y += dt * parseFloat(speedInput.value);
+    // `frozen` is set by a sequence for an icon it has landed in a slot: it must
+    // stop being updated BEFORE its resting orientation can stick, because the
+    // icon's own controller reassigns rotation every frame.
+    try { if (!component?.frozen) component?.api.update?.(dt); } catch (e) { console.error('component update:', e); }
+    // The pack's own update runs FIRST (its controller assigns rotation), then
+    // the sequence advances the wrapper/overlay. They never share a property.
+    const seq = component?.seq;
+    if (seq) {
+      // ALWAYS, not only while playing: a held phase still has to re-anchor its
+      // landed objects to their rings (the camera and the viewport can change
+      // under a finished sequence) and still has to settle a spring-back.
+      seq.update(dt);
+      // Keep the transport honest after a programmatic seek() too (e.g. from the
+      // console); only touch the DOM when something actually changed.
+      if (seq.time !== seqUi.time || seq.playing !== seqUi.playing || seq.duration !== seqUi.duration) syncSequenceUI();
+    }
+    mixer?.update(dt);
   }
-  mixer?.update(dt);
   controls.update();
   renderer.render(scene, camera);
 });
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+// Both events, because neither alone is enough: `resize` is what a desktop
+// window and the emulator produce, and mobile Safari fires `orientationchange`
+// with the new metrics sometimes arriving a frame later.
+addEventListener('resize', applyStage);
+addEventListener('orientationchange', () => { applyStage(); requestAnimationFrame(applyStage); });
 
 // Debug handle for console experiments (material tweaks, inspection).
 window.viewer = { THREE, scene, camera, renderer, pivot, controls,
   get model() { return current; }, get component() { return component; },
-  get sequence() { return component?.seq ?? null; } };   // { duration, time, seek(t), play(), pause(), … } or null
+  get sequence() { return component?.seq ?? null; },   // { duration, time, seek(t), play(), pause(), … } or null
+  // The size/orientation the app is actually composing against (§4, ?dev=mobile),
+  // the curtain, and the rotation lock — all readable so a check can assert the
+  // thing the code uses rather than the thing the window happens to be.
+  stage,
+  get curtain() { return { up: curtain.up, reason: curtain.reason }; },
+  get orientation() {
+    return { stage: stage.orientation, want: wantedOrientation(), held: orientationHold };
+  },
+  // ?dev=mobile only: flip the SIMULATED orientation from a script, through the
+  // very same path the on-screen button uses.
+  devStage: DEV_MOBILE ? {
+    get size() { return [stage.w, stage.h]; },
+    flip() { devStage.flipped = !devStage.flipped; applyStage(); return [stage.w, stage.h]; },
+    set(w, h) { devStage.w = w; devStage.h = h; devStage.flipped = false; applyStage(); return [stage.w, stage.h]; },
+  } : null };
 </script>
 </body>
 </html>

@@ -88,6 +88,14 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
   **Stars** checkbox turns it off; drop or pick any `.png/.jpg/.webp` to use
   your own (a chip removes it); `?bg=path/to/image.jpg` works too
   (same-origin only). Packs can ship their own background (see below).
+- **Loading curtain**: an opaque layer that is up before the first paint and
+  comes down as soon as there is something to see — for a pack with a
+  sequence, the instant its first step can draw; the remaining icons keep
+  loading behind it. A pack can restyle it (`loading:` in `icons.yml`: a
+  ground colour, an optional image, `animation: pulse | none`); the viewer's
+  own default is a near-black ground and a soft pulsing disc. There is no
+  spinner and no progress bar, by decision. It also carries the rotation
+  prompt below.
 - **Lighting**: procedurally generated RoomEnvironment IBL + ACES tone
   mapping, which is what makes PBR/glass materials read correctly.
 - Backdrop/stage meshes bundled inside sample models (names matching
@@ -222,6 +230,7 @@ motion controller.
 my-icons.zip
 ├── component.js       ← the universal pack loader: copy components/pack.component.js, never edit it
 ├── icons.yml          ← icons: [nameA, nameB]   background: backgrounds/sky.jpg   sequence: sequence.yml
+│                        (also optional: loading: { ground, image, animation } — the loading curtain)
 ├── sequence.yml       ← optional: how icons ENTER, and how a tap collects them
 ├── backgrounds/       ← optional images referenced from icons.yml
 └── icons/
@@ -291,6 +300,15 @@ every load and ignores a pack's saved `resume:` step, so a reload always shows
 your latest edit from the beginning. (A pack's `icons.yml` and `sequence.yml`
 are never cached, dev mode or not.)
 
+Add **`?dev=mobile`** — the flags compose, so `?dev=1,mobile` is both — to get a
+**phone-sized, letterboxed stage inside your desktop window**, with a small bar
+that reports the size the page is actually composing against and flips the
+simulated orientation. The whole app measures that stage rather than the
+window, so a portrait layout, a rotation prompt and a swipe all behave exactly
+as they would on a device; the wheel is mapped onto the swipe gesture so a
+trackpad can drive it. The stage is clamped to your window rather than scaled,
+so make the window tall enough (1280x940 comfortably holds 375x812).
+
 Add **`?ui=0`** to hide every viewer control — picker, buttons, sequence
 transport, status line, links — so the page shows only what the pack draws.
 Handy for showing a pack as the page it is meant to be, and for screenshots.
@@ -322,12 +340,16 @@ sequence: sequence.yml
 version: 1
 ease: { swell: &swell outCubic }
 resume: { minutes: 60 }            # optional; see "What it stores" below
+input:  { zoom: false, drag: icon, swipe: up }   # optional; these are the defaults
+orientation: any                   # optional; portrait | landscape | any
 stage:
-  hud:     { slot:  { type: slots, count: 3, top: 0.14, size: 0.075 } }
+  hud:     { slot:  { type: slots, count: 3, top: 0.14, size: 0.075,
+                      portrait: { size: 0.12, top: 0.11 } } }
   icon:    { ref: current }
   overlay:
     line1: { type: text, top: 0.735, size: 0.05 }
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", persist: true }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", persist: true,
+             portrait: { size: 0.085, top: 0.88 } }
 steps:
   - id: one
     icon: twist
@@ -377,9 +399,32 @@ steps:
   exception: it leaves the animation loop as the flight begins and the flight
   turns it to face front, by the shortest way round, so it arrives square
   instead of snapping at the end.
+- **One declaration for what a finger may do.** `input: { zoom, drag, swipe }`
+  — sequence-wide, and any step may override it. `zoom` is **off by default**
+  for a pack (a pack composes a fixed frame, and a scroll-wheel dolly is not
+  part of it); `drag` is `icon` (hit-tested, below), `camera` (orbit) or
+  `none`; `swipe: up` lets a flick fire the same call-to-action the button
+  does. A swipe is judged by the shape of the gesture — predominantly
+  vertical, far enough, fast enough — so one that starts on the icon still
+  counts, and a slower or rounder one is still just a drag.
+- **A pack can ask to be held the right way up.** `orientation: portrait` (or
+  `landscape`) curtains the stage, shows a rotate glyph and pauses the
+  sequence where it stands until the device comes back; nothing advances
+  behind the curtain and it resumes at exactly the same moment. It is
+  **advisory** — no web page can turn a phone, and mobile Safari has no
+  orientation-lock API at all — so this prompts rather than forces. It is
+  decided by aspect ratio, so a narrow desktop window behaves like a phone.
+  `?orientation=any` switches it off for a review pass.
+- **Portrait sizing.** Any overlay element can carry a `portrait: { … }` block
+  overriding its placement (`top`, `left`, `size`, `gap`, `ring`, `weight`,
+  `tracking`) when the stage is taller than it is wide. It exists because
+  overlay type is sized in `vmin` while the 3D icon is framed against the
+  stage's height: those agree on a desktop and differ by more than 2x on a
+  phone, so rings and buttons authored on a laptop read as specks otherwise.
+  The numbers are yours to choose — the viewer will not guess them.
 - **Drags are hit-tested.** A press picks the nearest icon actually under it —
   the big one, or one already sitting in a ring — and only that one turns; a
-  press on empty canvas turns nothing. Zoom (wheel and pinch) is untouched.
+  press on empty canvas turns nothing.
   Let go and the icon springs back to face front; `rest: { spring: false }`
   leaves it where it was left, and a step can override the sequence's default.
   This works for an icon with no controller of its own — the viewer owns it.
@@ -423,3 +468,7 @@ viewer will say so rather than fail silently.
 - No KTX2 texture support (same deal: add `KTX2Loader` if needed).
 - Sequences never own rotation, and have no keyframes beyond `[from, to]`,
   no camera moves, and no `goto` — steps run in order, or restart.
+- The rotation prompt is advisory: browsers do not let a page turn a device,
+  and the viewer does not pretend otherwise.
+- The loading curtain reports no progress. A pack's total work is not known in
+  advance, and a fake bar would be worse than a quiet wait.

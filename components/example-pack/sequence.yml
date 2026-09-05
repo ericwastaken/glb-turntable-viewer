@@ -41,6 +41,38 @@ resume:
   minutes: 30
   id: example-pack        # optional; defaults to the pack's name
 
+# --- input: zoom, drag and swipe -----------------------------------------------
+# One declaration for the three things a finger can do, sequence-wide and
+# overridable per step (AGENT.md §12.13).
+input:
+  # FALSE is the default for a pack, and it is why this line exists to be read
+  # rather than to be changed: a pack composes a FIXED frame, and a camera dolly
+  # is not part of it. Set it true only if a visitor pinching the icon closer is
+  # genuinely part of the design.
+  zoom: false
+  # icon   hit-tested: the press turns whichever icon it landed on (this pack)
+  # camera orbit the camera instead, as the plain model viewer does
+  # none    neither
+  drag: icon
+  # A flick UP fires the step's call-to-action — the same verb the button runs,
+  # through the same guard, so the two can never disagree. Written as one word
+  # here; the long form takes the thresholds:
+  #   swipe: { dir: up, ratio: 1.5, distance: 0.08, time: 0.5 }
+  # ratio = how much more vertical than horizontal it must be, distance = the
+  # fraction of the stage's height the finger must cover, time = the longest a
+  # flick may take. Anything slower or rounder stays an icon drag.
+  swipe: up
+
+# --- orientation: what this sequence was composed for --------------------------
+# portrait | landscape | any (the default). On a mismatch the viewer drops its
+# curtain, plays a rotate glyph and HOLDS the sequence where it is; it resumes
+# at the same time and step when the device comes back. It is ADVISORY — no
+# browser lets a page turn a phone, and mobile Safari has no orientation-lock
+# API at all — so this prompts, it does not force.
+# `any` here because this pack is the viewer's own demo and has to look right in
+# a desktop window; a pack composed for a phone would say `portrait`.
+orientation: any
+
 # --- pointer: how big a grab zone each icon gets -----------------------------------
 # A press is HIT-TESTED against the icons actually on screen — the big one and
 # every icon already sitting in a ring — and only the nearest hit is dragged.
@@ -76,7 +108,14 @@ stage:
   hud:
     # Three rings, collected left to right. Each ring is separately addressable
     # as `slot1`, `slot2`, `slot3` — the element's name plus a 1-based index.
-    slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.40, color: "#e9e3f4", dim: "#e9e3f433" }
+    # `portrait:` overrides the PLACEMENT keys when the stage is taller than it
+    # is wide (AGENT.md §12.15). It is needed because the overlay is sized in
+    # vmin while the 3D icon is framed against stage HEIGHT: on 1280x800 those
+    # agree exactly, and on 375x812 they differ by 2.2x, so a ring sized for a
+    # desktop reads as a speck on a phone. The numbers are a design decision,
+    # not a derived correction.
+    slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.40, color: "#e9e3f4", dim: "#e9e3f433",
+            portrait: { size: 0.12, top: 0.11 } }
   icon:
     ref: current                     # a flow always drives the icon itself
     # How an icon is posed when a step it appears in BEGINS. Per-step `start:`
@@ -91,15 +130,19 @@ stage:
     # while `continue` can bring it back most of a turn away.
     start: reset
   overlay:
-    line1: { type: text, top: 0.72, size: 0.05, weight: 700, tracking: 0.10 }
-    line2: { type: text, top: 0.79, size: 0.05, weight: 700, tracking: 0.10 }
+    # Copy keeps its vmin size in portrait: the real constraint on a line of
+    # type is WRAPPING, and 0.05 vmin already fits a 375 px column. Only the
+    # `top` moves, to make room for the taller rings above.
+    line1: { type: text, top: 0.72, size: 0.05, weight: 700, tracking: 0.10, portrait: { top: 0.69 } }
+    line2: { type: text, top: 0.79, size: 0.05, weight: 700, tracking: 0.10, portrait: { top: 0.765 } }
     # TWO MODELS, one flag, because the element is declared ONCE here while its
     # animation lives in the shared entrance below:
     #   persist: true   arrives once and is then skipped in every later step —
     #                   never hidden, never re-animated, never moves.
     #   persist: false  its tracks play in EVERY step, so it can leave on tap
     #                   and come back with the next one. That is this sequence.
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: false }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: false,
+             portrait: { size: 0.085, top: 0.88 } }
 
 # --- state at frame 0 ----------------------------------------------------------
 # Not animation. Slots start empty here; `slot: { filled: 1 }` (a count) or

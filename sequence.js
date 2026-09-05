@@ -40,6 +40,15 @@
 //   - The stage (the DOM) is built ONCE and lives for the whole flow. Slots
 //     accumulate, and the call-to-action the visitor is about to tap is never
 //     rebuilt or re-animated under their finger.
+//   - `input:` (§12.13), `orientation:` (§12.14) and `portrait:` (§12.15) are
+//     DECLARATIONS, not animation. This file resolves them for the step that is
+//     showing and pushes the result to the host, which owns the controls, the
+//     curtain and the render loop. A swipe and a tap run the same verb through
+//     the same guard; the orientation lock is advisory, and the viewer holds
+//     this timeline rather than pausing it, so it resumes where it stopped.
+//   - Sizes and gestures are measured against the HOST'S STAGE (host.stage),
+//     never the window. ?dev=mobile substitutes that one accessor, so an
+//     emulated phone exercises these code paths and not a copy of them.
 //
 // Anime.js behaviour this file is written around (measured against the
 // vendored v4.5.0 build): a child tween's `from` value is NOT rendered until
@@ -84,10 +93,37 @@ const DEFAULT_PADDING = 0.25;    // grab zone, as a fraction of the projected ra
 // the ease's argument for how far past centre it goes.
 const REST_DEFAULT = { spring: true, dur: 0.8, ease: 'outBack(0.25)' };
 const REST_KEYS = ['spring', 'dur', 'ease'];
-// A drag of the viewport's SHORTER side is one full turn, so the gesture feels
+// A drag of the stage's SHORTER side is one full turn, so the gesture feels
 // the same on a phone and on a desktop.
 const DRAG_TURN = 2 * Math.PI;
 const DRAG_PITCH_LIMIT = 1.2;    // radians; past this an icon reads as tumbling
+
+// ---- input: one declaration for zoom, drag and swipe (AGENT.md §12.13) --------
+// These three used to be scattered and partly accidental: `enableZoom` was
+// referenced nowhere in the app (so a scroll dollied the camera even in pack
+// mode, which nobody had chosen), and camera rotation was switched off
+// unconditionally whenever a sequence attached its pointer router.
+export const DRAG_MODES = ['icon', 'camera', 'none'];
+export const SWIPE_DIRS = ['up', 'none'];
+const INPUT_KEYS = ['zoom', 'drag', 'swipe'];
+const SWIPE_KEYS = ['dir', 'ratio', 'distance', 'time'];
+const INPUT_DEFAULT = {
+  // FALSE for a pack, deliberately: a pack composes a fixed frame and a camera
+  // dolly is not part of it. A viewer showing a plain model still zooms — this
+  // default belongs to the sequence, not to the app.
+  zoom: false,
+  drag: 'icon',
+  swipe: {
+    dir: 'up',        // swipe UP advances, matching "scroll down a page"
+    ratio: 1.5,       // |dy| must beat |dx| by this much, or it is a drag
+    distance: 0.08,   // fraction of the stage's HEIGHT the finger must cover
+    time: 0.5,        // seconds; anything slower is a considered drag, not a flick
+  },
+};
+
+// The orientation a sequence was composed for. ADVISORY — the viewer prompts,
+// it cannot turn a device (§12.14).
+export const ORIENTATIONS = ['portrait', 'landscape', 'any'];
 // Anime.js v4 easing names (the parametrised forms and springs are left out).
 export const EASE_NAME = /^(linear|none|in|out|inOut|outIn|(in|out|inOut|outIn)(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$/;
 const CUBIC_BEZIER = /^cubic-bezier\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)$/;
@@ -172,17 +208,53 @@ function resolveAt(expr, labels, cursorEnd, where) {
 }
 
 // --- 2D elements ---------------------------------------------------------------
-// Real DOM (selectable, accessible), positioned by viewport fractions like the
+// Real DOM (selectable, accessible), positioned by STAGE fractions like the
 // component `framing`: `top` is the element's vertical CENTER as a fraction
 // from the top, `left` its horizontal center (default 0.5), `size` its font
-// size as a fraction of the viewport's SHORTER side (vmin) — keyed to height
-// alone, a line that fits a landscape desktop wraps into its neighbour on a
-// portrait phone (measured: 0.05 × 812 px = 41 px type in a 375 px column).
-function placeElement(el, name, decl, where) {
-  el.dataset.seq = name;
-  el.style.left = `${frac(decl.left ?? 0.5, where + '.left') * 100}%`;
-  el.style.top = `${frac(decl.top ?? 0.5, where + '.top') * 100}%`;
-  el.style.fontSize = `${num(decl.size ?? 0.045, where + '.size') * 100}vmin`;
+// size as a fraction of the stage's SHORTER side (vmin).
+//
+// Two things about `size` that a landscape desktop hides. The overlay is sized
+// in vmin while the 3D icon is framed against stage HEIGHT, so on 1280x800 the
+// two agree exactly (vmin IS the height) and on 375x812 they diverge by 2.2x —
+// which is why slots and a call-to-action read as too small on a phone unless
+// the author says otherwise. That is what `portrait:` is for (§12.15); there is
+// deliberately no auto-derived correction factor, because the right mobile
+// proportions are a design decision and not arithmetic.
+//
+// And the unit is written through `--vmin` (which is `1vmin` in the page's own
+// CSS) rather than as a literal `vmin`, so ?dev=mobile can point it at an
+// emulated stage instead of the window without a second code path.
+
+// Placement keys a `portrait:` block may override. Deliberately NOT the whole
+// declaration: `type`, `text`, `persist`, `count` and the colours are the
+// element's identity, and an override able to change those would be a second
+// element wearing the same name.
+export const PORTRAIT_KEYS = ['top', 'left', 'size', 'gap', 'ring', 'weight', 'tracking'];
+
+function readPortrait(decl, where) {
+  const p = decl.portrait;
+  if (p === undefined || p === null) return null;
+  if (!isObj(p)) fail(`${where}.portrait`, 'must be a mapping of placement overrides such as { size: 0.12, top: 0.11 }');
+  for (const k of Object.keys(p)) {
+    if (!PORTRAIT_KEYS.includes(k)) {
+      fail(`${where}.portrait.${k}`, `cannot be overridden per orientation — only ${PORTRAIT_KEYS.join(', ')} can`);
+    }
+  }
+  return p;
+}
+
+// Every key an orientation is allowed to change, in one pass — so re-placing an
+// element when the stage turns runs exactly the code that placed it at build
+// time, and the two cannot drift.
+function styleElement(el, decl, where, portrait) {
+  const d = portrait ? { ...decl, ...portrait } : decl;
+  el.style.left = `${frac(d.left ?? 0.5, where + '.left') * 100}%`;
+  el.style.top = `${frac(d.top ?? 0.5, where + '.top') * 100}%`;
+  el.style.fontSize = `calc(var(--vmin) * ${num(d.size ?? 0.045, where + '.size') * 100})`;
+  if (d.weight !== undefined) el.style.fontWeight = String(d.weight);
+  if (d.tracking !== undefined) el.style.letterSpacing = `${num(d.tracking, where + '.tracking')}em`;
+  if (d.gap !== undefined) el.style.gap = `${num(d.gap, where + '.gap')}em`;
+  if (d.ring !== undefined) el.style.setProperty('--slot-ring', `${num(d.ring, where + '.ring')}em`);
 }
 
 function buildElement(name, decl, layer) {
@@ -193,12 +265,14 @@ function buildElement(name, decl, layer) {
   if (type === 'slots') return buildSlots(name, decl, where);
   const el = document.createElement(type === 'button' ? 'button' : 'div');
   el.className = `fg-el fg-${type}`;
-  placeElement(el, name, decl, where);
+  el.dataset.seq = name;
+  const portrait = readPortrait(decl, where);
+  // `place(isPortrait)` is called again whenever the stage's orientation flips.
+  const place = p => styleElement(el, decl, where, p ? portrait : null);
+  place(false);
   if (decl.color !== undefined) { el.style.color = String(decl.color); el.style.setProperty('--glow', String(decl.color)); }
-  if (decl.weight !== undefined) el.style.fontWeight = String(decl.weight);
-  if (decl.tracking !== undefined) el.style.letterSpacing = `${num(decl.tracking, where + '.tracking')}em`;
   if (type === 'button') el.type = 'button';
-  return { el, type };
+  return { el, type, place };
 }
 
 // A `slots` row: `count` rings, each separately addressable as a `to:`
@@ -209,10 +283,11 @@ function buildElement(name, decl, layer) {
 function buildSlots(name, decl, where) {
   const el = document.createElement('div');
   el.className = 'fg-el fg-slots';
-  placeElement(el, name, decl, where);
+  el.dataset.seq = name;
+  const portrait = readPortrait(decl, where);
+  const place = p => styleElement(el, decl, where, p ? portrait : null);
+  place(false);
   const count = Math.max(1, Math.round(num(decl.count ?? 3, where + '.count')));
-  if (decl.gap !== undefined) el.style.gap = `${num(decl.gap, where + '.gap')}em`;
-  if (decl.ring !== undefined) el.style.setProperty('--slot-ring', `${num(decl.ring, where + '.ring')}em`);
   el.style.setProperty('--slot-on', String(decl.color ?? '#e9e3f4'));
   el.style.setProperty('--slot-off', String(decl.dim ?? '#e9e3f444'));
   const cells = [];
@@ -227,7 +302,7 @@ function buildSlots(name, decl, where) {
     el.appendChild(cell);
     cells.push({ el: cell, img });
   }
-  return { el, type: 'slots', count, cells };
+  return { el, type: 'slots', count, cells, place };
 }
 
 // The three slot states are a function of the FLOW, never of a counter:
@@ -416,7 +491,7 @@ export function createSequence(doc, host) {
       bind[name] = {
         kind: 'dom', el: built.el, type: built.type, state: { ...DEFAULTS.dom },
         text: decl.text, persist: decl.persist === true, arrived: false,
-        count: built.count, cells: built.cells,
+        count: built.count, cells: built.cells, place: built.place,
       };
       if (built.type === 'slots') {
         built.cells.forEach((cell, i) => {
@@ -468,6 +543,49 @@ export function createSequence(doc, host) {
   }
   const restDefault = readRest(doc.rest, 'rest', REST_DEFAULT);
   const stepRest = steps.map((s, i) => readRest(s.rest, `steps.${stepId(s, i)}.rest`, restDefault));
+
+  // ---- input: zoom, drag and swipe -----------------------------------------------------
+  // Sequence-wide, overridable per step, exactly like `rest:`. `swipe:` takes
+  // the shorthand `up` / `none` or the full mapping with its thresholds, so the
+  // common case is one word and a retune is still declarative.
+  function readSwipe(decl, where, base) {
+    if (decl === undefined) return base;
+    if (typeof decl === 'string') {
+      if (!SWIPE_DIRS.includes(decl)) fail(where, `must be one of ${SWIPE_DIRS.join(', ')} — or a mapping { dir, ratio, distance, time }`);
+      return { ...base, dir: decl };
+    }
+    if (!isObj(decl)) fail(where, `must be ${SWIPE_DIRS.join(' / ')} or a mapping { dir, ratio, distance, time }`);
+    for (const k of Object.keys(decl)) if (!SWIPE_KEYS.includes(k)) warnings.push(`${where}: unknown key "${k}" (ignored)`);
+    if (decl.dir !== undefined && !SWIPE_DIRS.includes(decl.dir)) fail(`${where}.dir`, `must be one of ${SWIPE_DIRS.join(', ')}`);
+    const positive = (v, k, b) => (v === undefined ? b : Math.max(0, num(v, `${where}.${k}`)));
+    return {
+      dir: decl.dir ?? base.dir,
+      ratio: positive(decl.ratio, 'ratio', base.ratio),
+      distance: positive(decl.distance, 'distance', base.distance),
+      time: positive(decl.time, 'time', base.time),
+    };
+  }
+  function readInput(decl, where, base) {
+    if (decl === undefined || decl === null) return base;
+    if (!isObj(decl)) fail(where, 'must be a mapping such as { zoom: false, drag: icon, swipe: up }');
+    for (const k of Object.keys(decl)) if (!INPUT_KEYS.includes(k)) warnings.push(`${where}: unknown key "${k}" (ignored)`);
+    if (decl.zoom !== undefined && typeof decl.zoom !== 'boolean') fail(`${where}.zoom`, 'must be true or false');
+    if (decl.drag !== undefined && !DRAG_MODES.includes(decl.drag)) fail(`${where}.drag`, `must be one of ${DRAG_MODES.join(', ')}`);
+    return {
+      zoom: decl.zoom === undefined ? base.zoom : decl.zoom,
+      drag: decl.drag === undefined ? base.drag : decl.drag,
+      swipe: readSwipe(decl.swipe, `${where}.swipe`, base.swipe),
+    };
+  }
+  const inputDefault = readInput(doc.input, 'input', INPUT_DEFAULT);
+  const stepInput = steps.map((s, i) => readInput(s.input, `steps.${stepId(s, i)}.input`, inputDefault));
+
+  // ---- orientation: what this sequence was composed for ---------------------------------
+  // The VIEWER owns the lock (it owns the curtain and the render loop); this is
+  // only the declaration. It is advisory by necessity: screen.orientation.lock()
+  // needs fullscreen and does not exist in mobile Safari at all.
+  const orientation = doc.orientation ?? 'any';
+  if (!ORIENTATIONS.includes(orientation)) fail('orientation', `must be one of ${ORIENTATIONS.join(', ')}`);
 
   // ---- fade capability -------------------------------------------------------------
   const degrade = doc.requires?.['icon.fade']?.degrade ?? 'scale-only';
@@ -696,6 +814,12 @@ export function createSequence(doc, host) {
   // step's `timeline:`; `transition` plays the outgoing step's `exit:` and,
   // `overlap` seconds before that ends, the incoming step's `timeline:`.
   let phase = null, t = 0, playing = true, disposed = false, activeHandle;
+  // A viewer-level HOLD (today: the rotation lock, §12.14). Nothing advances and
+  // nothing is written while it is on, but `time`, `step` and the phase are
+  // untouched, so play resumes exactly where it stopped. Deliberately NOT
+  // pause(): pause()'s partner play() restarts a phase that has already reached
+  // `end: hold`, which is the last thing a returning visitor should see.
+  let held = false;
   let lastCopy;
   const handles = new Map();
   if (host.initialHandle) handles.set(host.initialHandle.name, host.initialHandle);
@@ -956,6 +1080,10 @@ export function createSequence(doc, host) {
 
   function render() {
     host.beginFrame?.();
+    // Both are no-ops unless something actually changed: the step's `input:`
+    // policy, and the orientation the 2D elements are placed for.
+    syncInput();
+    syncLayout();
     // 3D first, 2D second: the anchoring READS the rings' rects, and reading
     // them before this frame's DOM writes keeps it off the layout critical
     // path instead of forcing a reflow per ring.
@@ -1078,31 +1206,118 @@ export function createSequence(doc, host) {
     return out;
   }
 
-  // The `rest:` in force right now — the step being shown, or the sequence's
-  // own default.
-  function restNow() {
+  // Which step's overrides are in force right now — the incoming one once a
+  // transition has swapped, otherwise the outgoing one. Shared by `rest:` and
+  // `input:` so the two can never disagree about which step is showing.
+  function stepNow() {
     const p = phase;
-    const i = (p && p.inStep !== null && p.inStep !== undefined && t >= (p.swapAt ?? Infinity)) ? p.inStep : (p?.outStep ?? flow.index);
-    return stepRest[i] ?? restDefault;
+    return (p && p.inStep !== null && p.inStep !== undefined && t >= (p.swapAt ?? Infinity)) ? p.inStep : (p?.outStep ?? flow.index);
+  }
+  function restNow() { return stepRest[stepNow()] ?? restDefault; }
+  function inputNow() { return stepInput[stepNow()] ?? inputDefault; }
+
+  // The viewer owns `controls.enableZoom` / `enableRotate`, so the resolved
+  // policy is PUSHED to it — and only when it actually changes, which is once
+  // per step at most. The per-frame render pass already runs, so this rides
+  // along rather than needing plumbing of its own.
+  let lastInput = null;
+  function syncInput() {
+    const p = inputNow();
+    if (p === lastInput) return;
+    lastInput = p;
+    host.setInput?.({ zoom: p.zoom, drag: p.drag, swipe: p.swipe.dir });
   }
 
-  let grab = null;   // { handle, x, y, forward }
+  // Re-place every 2D element when the stage's orientation flips (§12.15).
+  // Same check, same pass: cheap, and it cannot miss a resize because the
+  // render pass is what notices.
+  let lastPortrait = null;
+  function syncLayout() {
+    const p = !!host.stage?.portrait;
+    if (p === lastPortrait) return;
+    lastPortrait = p;
+    for (const b of Object.values(bind)) b.place?.(p);
+  }
+
+  // ---- actions: what a tap (or a swipe) fires ---------------------------------------------
+  // Is a call-to-action live right now? The runtime already marks actionable
+  // overlay elements `fg-action`; a step's `on:` says what the verb is. So a
+  // swipe during a transition, or on a step with no `advance`, has nothing to
+  // fire and does exactly nothing.
+  function verbLive(name) {
+    const verb = phase?.on?.[name];
+    if (!verb || verb === 'nothing') return false;
+    const b = bind[name];
+    if (!b || !b.el || !b.el.classList.contains('fg-action')) return false;
+    if (verb === 'replay') return true;
+    // The icon in flight owns the stage until it lands.
+    return !(phase.kind === 'transition' && t < phase.duration);
+  }
+  function actionable() {
+    for (const name of Object.keys(phase?.on ?? {})) if (verbLive(name)) return name;
+    return null;
+  }
+  // The one place a verb is carried out, so a tap and a swipe cannot diverge.
+  function fireAction(name) {
+    if (!verbLive(name)) return false;
+    const verb = phase.on[name];
+    if (verb === 'replay') { seekTo(0); playing = true; return true; }
+    if (verb === 'advance') advance();
+    else if (verb === 'restart') restart();
+    return true;
+  }
+
+  // A SWIPE is classified by the SHAPE OF THE GESTURE, not by where it started:
+  // a flick that begins on the icon still counts, because the icon fills the
+  // middle of the stage and that is where a thumb lands. Predominantly
+  // vertical, far enough, and fast enough — anything slower or rounder stays an
+  // icon drag. A gesture reclassified as a swipe after it has already turned the
+  // icon is not left crooked: the release below always arms the `rest:`
+  // spring-back, which returns it while the step advances.
+  function trySwipe(dx, dy, secs) {
+    const cfg = inputNow().swipe;
+    if (cfg.dir !== 'up') return false;
+    if (secs > cfg.time) return false;                             // considered, not flicked
+    if (Math.abs(dy) <= Math.abs(dx) * cfg.ratio) return false;    // too round
+    if (-dy < cfg.distance * Math.max(1, host.stage?.h ?? 1)) return false;   // UP is a negative dy
+    const name = actionable();
+    if (!name) return false;                                       // nothing to fire: do nothing
+    return fireAction(name);
+  }
+
+  let grab = null;      // { handle, x, y, forward }
+  let gesture = null;   // { x0, y0, x, y, t0 } — the swipe classifier's raw material
+  const WHEEL_GAP = 300;         // ms: a longer pause is a new flick, not the same one
+  let wheelAcc = 0, wheelAt = 0;
+
+  // What `down` returns tells the host how much of the gesture to take:
+  //   'grab'  an icon was hit — capture the pointer and drive it
+  //   'watch' nothing was hit, but the gesture is still being classified as a
+  //           possible swipe. NOT captured, so `drag: camera` still orbits.
+  //   false   nothing to do with this one at all.
   const router = {
     down(x, y) {
+      const p = inputNow();
+      gesture = p.swipe.dir === 'none' ? null : { x0: x, y0: y, x, y, t0: performance.now() };
+      const claim = gesture ? 'watch' : false;
+      if (p.drag !== 'icon') return claim;         // the camera's, or nobody's
       const h = host.hitTest?.(grabCandidates(), x, y, hitPadding) ?? null;
-      if (!h) return false;                        // a drag on nothing rotates nothing
+      if (!h) return claim;                        // a drag on nothing rotates nothing
       dragOf(h).tl = null;                         // a new grab cancels a spring-back
       // An icon that ships its own pointer handlers keeps owning its rotation;
       // the runtime only routes the gesture to it. Everything else — including
       // an icon with no controller at all — is turned by the runtime.
       grab = { handle: h, x, y, forward: h.api.pointer ?? null };
       grab.forward?.down?.(x, y);
-      return true;
+      return 'grab';
     },
     move(x, y) {
+      if (gesture) { gesture.x = x; gesture.y = y; }
       if (!grab) return;
       if (grab.forward) { grab.forward.move?.(x, y); return; }
-      const side = Math.max(1, Math.min(innerWidth, innerHeight));
+      // The STAGE's shorter side, not the window's: on an emulated phone the
+      // gesture has to feel like it does on a phone.
+      const side = Math.max(1, Math.min(host.stage?.w ?? 1, host.stage?.h ?? 1));
       const d = dragOf(grab.handle);
       d.yaw += ((x - grab.x) / side) * DRAG_TURN;
       d.pitch = Math.max(-DRAG_PITCH_LIMIT, Math.min(DRAG_PITCH_LIMIT, d.pitch + ((y - grab.y) / side) * DRAG_TURN));
@@ -1110,20 +1325,40 @@ export function createSequence(doc, host) {
       if (!playing) render();                      // a held phase still has to redraw
     },
     up() {
-      if (!grab) return;
-      const g = grab; grab = null;
-      if (g.forward) { g.forward.up?.(); return; }
-      const cfg = restNow();
-      const d = dragOf(g.handle);
-      if (!cfg.spring || cfg.dur <= 0) return;     // `spring: false` leaves it where it was left
-      if (!d.yaw && !d.pitch) return;
-      // A real tween, not a per-frame decay, so the authored ease (outBack's
-      // overshoot, say) is the one Anime.js implements.
-      d.tl = createTimeline({ autoplay: false, defaults: { composition: 'none' } });
-      d.tl.add(d, { yaw: 0, pitch: 0, duration: cfg.dur * 1000, ease: cfg.ease }, 0);
-      d.at = 0; d.dur = cfg.dur;
+      const g = gesture; gesture = null;
+      releaseGrab();
+      // AFTER the release, so a swipe that turned the icon on its way up is
+      // already springing back as the step advances.
+      if (g) trySwipe(g.x - g.x0, g.y - g.y0, (performance.now() - g.t0) / 1000);
+    },
+    // ?dev=mobile maps the wheel onto the SWIPE channel so the gesture can be
+    // exercised with a trackpad or a mouse. It goes through the classifier
+    // above — there is no second gesture implementation to drift out of step.
+    // A wheel DOWN (positive deltaY) is the page-scrolling gesture a swipe UP
+    // performs on a touch screen, hence the sign flip.
+    wheel(dy) {
+      const now = performance.now();
+      if (now - wheelAt > WHEEL_GAP) wheelAcc = 0;
+      wheelAt = now;
+      wheelAcc += dy;
+      if (trySwipe(0, -wheelAcc, 0)) wheelAcc = 0;
     },
   };
+
+  function releaseGrab() {
+    if (!grab) return;
+    const g = grab; grab = null;
+    if (g.forward) { g.forward.up?.(); return; }
+    const cfg = restNow();
+    const d = dragOf(g.handle);
+    if (!cfg.spring || cfg.dur <= 0) return;       // `spring: false` leaves it where it was left
+    if (!d.yaw && !d.pitch) return;
+    // A real tween, not a per-frame decay, so the authored ease (outBack's
+    // overshoot, say) is the one Anime.js implements.
+    d.tl = createTimeline({ autoplay: false, defaults: { composition: 'none' } });
+    d.tl.add(d, { yaw: 0, pitch: 0, duration: cfg.dur * 1000, ease: cfg.ease }, 0);
+    d.at = 0; d.dur = cfg.dur;
+  }
 
   // Spring-back runs in REAL time, not sequence time: it answers a finger, not
   // a timeline, and must survive a phase that has already reached `end: hold`.
@@ -1146,16 +1381,9 @@ export function createSequence(doc, host) {
     const b = bind[name];
     if (b.el.classList.contains('fg-action')) continue;
     b.el.classList.add('fg-action');
-    const handler = () => {
-      const verb = phase?.on?.[name];
-      if (!verb || verb === 'nothing') return;
-      if (verb === 'replay') { seekTo(0); playing = true; return; }
-      // A tap during a transition is ignored: the icon in flight owns the
-      // stage until it lands.
-      if (phase.kind === 'transition' && t < phase.duration) return;
-      if (verb === 'advance') advance();
-      else if (verb === 'restart') restart();
-    };
+    // A tap and a swipe run the SAME verb through the same guard (fireAction),
+    // so "the button works but the swipe does not" cannot happen.
+    const handler = () => { fireAction(name); };
     b.el.addEventListener('click', handler);
     listeners.push([b.el, handler]);
   }
@@ -1205,7 +1433,16 @@ export function createSequence(doc, host) {
     get stepIndex() { return flow.index; },
     get phase() { return phase?.kind ?? null; },
     get time() { return t; },
-    get playing() { return playing; },
+    // A held sequence reports itself as not playing — it is not — while keeping
+    // `playing` underneath, so the hold lifting resumes rather than restarts.
+    get playing() { return playing && !held; },
+    get held() { return held; },
+    // What this sequence was composed for; the VIEWER owns the lock itself.
+    orientation,
+    get input() { const p = inputNow(); return { zoom: p.zoom, drag: p.drag, swipe: { ...p.swipe } }; },
+    // The pointer router, so the ?dev=mobile stage can feed the wheel into the
+    // very same swipe classifier a finger uses.
+    router,
     // Ring presentation at the current time — for deterministic checks.
     // `mix` is the object -> glyph cross-fade (0 = object, 1 = mark).
     get slots() { return Array.from({ length: slotCount }, (_, i) => { const f = slotAt(i); return f ? { icon: f.icon, as: f.as, mix: f.mix ?? 1 } : null; }); },
@@ -1221,11 +1458,12 @@ export function createSequence(doc, host) {
     seek(seconds) { seekTo(seconds); },            // the dev transport: never persists
     play() { if (t >= (phase?.duration ?? 0)) seekTo(0); playing = true; },
     pause() { playing = false; },
+    hold(on) { held = !!on; },
     advance, restart,
     // Called by the host's render loop AFTER the pack's own update(dt).
     // `end: hold` is the whole termination story: clamp and stop.
     update(dt) {
-      if (disposed || !phase) return;
+      if (disposed || !phase || held) return;
       // Called EVERY frame, playing or not: a held phase still has to settle a
       // spring-back and still has to keep its landed objects anchored to rings
       // that the camera or the viewport may have moved under them.
@@ -1256,14 +1494,29 @@ export function createSequence(doc, host) {
   // the host's per-icon pointer attachment, which sent every drag anywhere on
   // the canvas to the active icon and gave landed objects nothing.
   host.attachDrag?.(router);
+  // Push the `input:` policy immediately rather than waiting for the first
+  // frame: a sequence that resumes into a later step does not draw until its
+  // icon has been acquired, and a stray wheel-zoom in between is exactly the
+  // accident this block exists to remove.
+  syncInput();
 
   // The starting step's icon is usually the one the viewer already loaded (put
   // it first in icons.yml and it always is). When a resume lands elsewhere the
   // right icon is acquired first, so nothing flashes at the wrong step.
   const startsHere = !flowMode || steps[flow.index].icon === undefined || steps[flow.index].icon === host.iconName;
-  if (startsHere) enterStep(flow.index);
+  // `posed` resolves the moment the STARTING STEP can draw — its t=0 pose
+  // applied — which is what the viewer's loading curtain waits for. `ready` is
+  // the whole pack: preload and every glyph capture, which deliberately carry
+  // on BEHIND the lifted curtain (AGENT.md §7).
+  let posed;
+  runtime.posed = new Promise(resolve => { posed = resolve; });
+  if (startsHere) { enterStep(flow.index); posed(); }
   runtime.ready = (async () => {
-    if (!startsHere) { await acquire(steps[flow.index].icon); if (!disposed) enterStep(flow.index); }
+    try {
+      if (!startsHere) { await acquire(steps[flow.index].icon); if (!disposed) enterStep(flow.index); }
+    } finally {
+      posed();   // resolved either way: a failed acquire must not hold the curtain up
+    }
     if (flowMode && !disposed) await preload();
   })();
   return runtime;
