@@ -38,6 +38,25 @@
   }
   #fg .fg-action { pointer-events: auto; cursor: pointer; }
   #fg .fg-action:hover { text-decoration: underline; text-underline-offset: .15em; }
+  /* Slots: a row of rings a sequence collects icons into. Three states —
+     pending (dim, empty), next (bright, empty: the ring the current icon will
+     land in) and filled (bright, holding that icon's 2D glyph). Every colour
+     and size is a custom property the sequence sets from the YAML; the values
+     here are only the defaults. */
+  #fg .fg-slots { display: flex; gap: .5em; --slot-on: #e9e3f4; --slot-off: #e9e3f444; --slot-ring: .07em; }
+  #fg .fg-slot {
+    width: 1em; height: 1em; border-radius: 50%; box-sizing: border-box;
+    border: var(--slot-ring) solid var(--slot-off); background: transparent;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    transition: border-color .25s ease, box-shadow .25s ease;
+  }
+  #fg .fg-slot.is-next   { border-color: var(--slot-on); box-shadow: 0 0 .5em color-mix(in srgb, var(--slot-on) 55%, transparent); }
+  #fg .fg-slot.is-filled { border-color: var(--slot-on); }
+  #fg .fg-slot .fg-glyph { width: 76%; height: 76%; object-fit: contain; display: block; }
+  /* An author rule beats the UA's [hidden] rule, so say it here too — without
+     this an emptied ring shows a broken-image icon instead of nothing. */
+  #fg .fg-slot .fg-glyph[hidden] { display: none; }
+  /* DEPRECATED: `pips` is the Phase 1 progress row, superseded by `slots`. */
   #fg .fg-pips { display: flex; gap: .9em; }
   #fg .fg-pip {
     width: 1em; height: 1em; border-radius: 50%;
@@ -604,9 +623,12 @@ async function applyComponentApi(api, name) {
     const root = api.sequence ? new THREE.Group().add(api.object) : api.object;
     pivot.add(root);
     pivot.rotation.set(0, 0, 0);
-    component = { name, api, kind: 'object', root, seq: null };
+    // `frozen` is the update switch: a sequence sets it while the icon it has
+    // just landed must stop being animated by its own controller.
+    component = { name, api, kind: 'object', root, seq: null, frozen: false };
     // Framing is solved here, at REST pose, and never again: the sequence's
-    // t=0 pose (e.g. scale 0.52, fade 0) must not shrink the framed box.
+    // t=0 pose (e.g. scale 0.52, fade 0) must not shrink the framed box, and a
+    // flow that swaps icons must not re-frame under the visitor.
     frameComponent(api);
   } else if (api?.material) {
     if (!current) { status.textContent = `Component ${name} provides a material — load a model first.`; return false; }
@@ -635,19 +657,219 @@ async function applyComponentApi(api, name) {
 const fgEl = $('fg');
 const seqWrap = $('seqWrap'), seqScrub = $('seqScrub'), seqPlay = $('seqPlay'), seqTime = $('seqTime');
 
+// The viewer holds exactly ONE live icon for a plain entrance, but a multi-step
+// flow keeps the icons it has already collected on screen while the next one
+// arrives. Those landed icons are reparented into `landedGroup` and dropped
+// from the update path — an icon that is still being updated cannot be frozen,
+// because its own controller reassigns rotation.y every frame (measured).
+// Everything three.js the sequence needs lives here; sequence.js owns time,
+// DOM and state and never imports three.
+const GLYPH_PX = 256;
+let glyphTarget = null;
+
+function makeSequenceHost(comp) {
+  const first = { name: comp.name, api: comp.api, wrapper: comp.root, frozen: false };
+  const handles = new Map([[first.name, first]]);
+  const landedGroup = new THREE.Group();
+  landedGroup.name = 'sequence-landed';
+  pivot.add(landedGroup);
+
+  function setActive(h) {
+    // `component.api` IS the active icon: the render loop, the pointer routing
+    // and unload all read it, so a flow swaps it rather than shadowing it.
+    if (!component) return;
+    detachPointer();
+    if (!h) { component.frozen = true; return; }
+    component.api = h.api;
+    component.root = h.wrapper;
+    component.frozen = false;
+    if (h.api.pointer) attachPointer(h.api.pointer);
+  }
+
+  function setFrozen(h, on) {
+    if (!!h.frozen === !!on) return;
+    h.frozen = !!on;
+    // attach() preserves the world transform; both parents are identity, so
+    // this is a bookkeeping move, not a visual one.
+    (on ? landedGroup : pivot).attach(h.wrapper);
+    // Safe only now: nothing is updating this icon any more.
+    if (on) h.api.object.rotation.y = 0;
+  }
+
+  function rest(h) {
+    setFrozen(h, false);
+    h.wrapper.position.set(0, 0, 0);
+    h.wrapper.scale.setScalar(1);
+  }
+
+  // The icon's visible radius about its wrapper's own origin, in wrapper-local
+  // units — the number the fit is computed from. Built from each mesh's
+  // GEOMETRY bounding sphere rather than an axis-aligned box, because the AABB
+  // of a spinning polyhedron swings by ~20% with orientation and the icon is
+  // still being spun by its controller when the fly begins. |offset| + radius
+  // is invariant under rotation about the wrapper origin, so the fit is the
+  // same wherever the icon happens to be pointing. Halo and outer shells are
+  // meshes too, so they count.
+  function iconRadius(wrapper) {
+    wrapper.updateWorldMatrix(true, true);
+    const inv = new THREE.Matrix4().copy(wrapper.matrixWorld).invert();
+    const rel = new THREE.Matrix4(), c = new THREE.Vector3(), sc = new THREE.Vector3();
+    let r = 0;
+    wrapper.traverse(o => {
+      if (!o.isMesh || !o.geometry) return;
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      const bs = o.geometry.boundingSphere;
+      if (!bs) return;
+      rel.multiplyMatrices(inv, o.matrixWorld);
+      c.copy(bs.center).applyMatrix4(rel);
+      sc.setFromMatrixScale(rel);
+      r = Math.max(r, c.length() + bs.radius * Math.max(sc.x, sc.y, sc.z));
+    });
+    return r || 0.5;
+  }
+
+  // Where a 2D element's centre is in the icon's own depth plane, and how much
+  // to shrink so the icon's visible extent fits inside the target's inner
+  // circle. A straight line at constant depth, because both ends are on the
+  // same plane.
+  function planMove(h, el, fit) {
+    const w = h.wrapper;
+    const from = { x: w.position.x, y: w.position.y, z: w.position.z, s: w.scale.x };
+    const radius = iconRadius(w);
+
+    const start = w.getWorldPosition(new THREE.Vector3());
+    const fwd = camera.getWorldDirection(new THREE.Vector3());
+    const depth = Math.max(1e-4, start.clone().sub(camera.position).dot(fwd));
+    const r = el.getBoundingClientRect();
+    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+    const ndc = new THREE.Vector3(
+      ((r.left + r.width / 2) / vw) * 2 - 1,
+      -((r.top + r.height / 2) / vh) * 2 + 1, 0.5).unproject(camera);
+    const dir = ndc.sub(camera.position).normalize();
+    const world = camera.position.clone().addScaledVector(dir, depth / Math.max(1e-6, dir.dot(fwd)));
+    const local = w.parent.worldToLocal(world);
+
+    // Inner diameter of the ring, in CSS pixels, minus its border.
+    const cs = getComputedStyle(el);
+    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+    const innerPx = Math.max(1, Math.min(r.width, r.height) - border);
+    const pxPerWorld = vh / (2 * depth * Math.tan((camera.fov * Math.PI / 180) / 2));
+    const s = (innerPx * fit) / (2 * radius * pxPerWorld);
+    return { from, to: { x: local.x, y: local.y, z: local.z, s } };
+  }
+
+  // A slot's glyph. Provided wins: `glyphs:` in icons.yml reaches us as
+  // api.glyph. Otherwise it is DERIVED — rendered once, offscreen, at the
+  // icon's front orientation, so every mark is framed the same way and none of
+  // them depends on where the icon happened to be rotated when it was
+  // collected. Captured at preload for exactly that reason.
+  function glyphFor(h) {
+    if (typeof h.api.glyph === 'string' && h.api.glyph) return h.api.glyph;
+    const obj = h.api.object;
+    const parent = obj.parent, ry = obj.rotation.y, wasVisible = obj.visible;
+    const gs = new THREE.Scene();
+    gs.environment = scene.environment;
+    const light = new THREE.DirectionalLight(0xffffff, 1.2);
+    light.position.set(3, 5, 4);
+    gs.add(light);
+    let url = null;
+    try {
+      obj.rotation.y = 0;              // front
+      obj.visible = true;
+      gs.add(obj);                     // temporarily; restored in `finally`
+      const sphere = new THREE.Box3().setFromObject(obj).getBoundingSphere(new THREE.Sphere());
+      const cam = new THREE.PerspectiveCamera(40, 1, 0.01, 1000);
+      const dist = (sphere.radius || 1) / Math.tan((40 * Math.PI / 180) / 2) * 1.08;   // a little air
+      cam.position.set(sphere.center.x, sphere.center.y, sphere.center.z + dist);
+      cam.lookAt(sphere.center);
+      if (!glyphTarget) {
+        glyphTarget = new THREE.WebGLRenderTarget(GLYPH_PX, GLYPH_PX);
+        // Without this the readback is linear-light and the mark comes out
+        // dark; with it three encodes exactly as it does for the canvas.
+        glyphTarget.texture.colorSpace = THREE.SRGBColorSpace;
+      }
+      const prevTarget = renderer.getRenderTarget(), prevAlpha = renderer.getClearAlpha();
+      renderer.setRenderTarget(glyphTarget);
+      renderer.setClearAlpha(0);
+      renderer.clear(true, true, true);
+      renderer.render(gs, cam);
+      const buf = new Uint8Array(GLYPH_PX * GLYPH_PX * 4);
+      renderer.readRenderTargetPixels(glyphTarget, 0, 0, GLYPH_PX, GLYPH_PX, buf);
+      renderer.setRenderTarget(prevTarget);
+      renderer.setClearAlpha(prevAlpha);
+
+      const cv = document.createElement('canvas');
+      cv.width = GLYPH_PX; cv.height = GLYPH_PX;
+      const img = new ImageData(GLYPH_PX, GLYPH_PX);
+      for (let y = 0; y < GLYPH_PX; y++) {           // GL reads bottom-up
+        const src = (GLYPH_PX - 1 - y) * GLYPH_PX * 4, dst = y * GLYPH_PX * 4;
+        img.data.set(buf.subarray(src, src + GLYPH_PX * 4), dst);
+      }
+      cv.getContext('2d').putImageData(img, 0, 0);
+      url = cv.toDataURL('image/png');
+    } catch (err) {
+      console.warn('[sequence] could not derive a glyph for', h.name, err);
+    } finally {
+      (parent ?? h.wrapper).add(obj);
+      obj.rotation.y = ry;
+      obj.visible = wasVisible;
+      light.dispose();
+    }
+    return url;
+  }
+
+  return {
+    root: fgEl, initialHandle: first, iconName: comp.name, file: comp.api.sequence.file,
+    packId: zipState?.label ?? comp.name,
+    picked: packIconPicked,
+    iconNames: zipState?.icons ? Object.keys(zipState.icons) : [comp.name],
+    async acquire(name) {
+      if (handles.has(name)) return handles.get(name);
+      const api = await zipState.icons[name]();
+      const wrapper = new THREE.Group().add(api.object);
+      wrapper.visible = false;
+      pivot.add(wrapper);
+      const h = { name, api, wrapper, frozen: false };
+      handles.set(name, h);
+      return h;
+    },
+    setActive, setFrozen, rest, planMove, glyphFor,
+    dispose() {
+      // Everything this host built is released here; the icon the page loaded
+      // is handed back to unloadComponent() exactly as it found it.
+      for (const h of handles.values()) {
+        if (h === first) continue;
+        try { h.api.dispose?.(); } catch (e) { console.warn('icon dispose:', e); }
+        h.wrapper.parent?.remove(h.wrapper);
+      }
+      handles.clear();
+      pivot.attach(first.wrapper);
+      pivot.remove(landedGroup);
+      if (component) {
+        component.api = first.api; component.root = first.wrapper; component.frozen = false;
+        detachPointer();
+        if (first.api.pointer) attachPointer(first.api.pointer);
+      }
+    },
+  };
+}
+
 async function startSequence(comp) {
-  const { api, name, root } = comp;
-  root.visible = false;   // no flash of the rest pose while the module loads
+  const api = comp.api, root0 = comp.root;
+  root0.visible = false;   // no flash of the rest pose while the module loads
   let seq = null;
   try {
     const { createSequence } = await import('./sequence.js');
-    seq = createSequence(api.sequence.doc, { root: fgEl, wrapper: root, api, iconName: name, file: api.sequence.file });
+    seq = createSequence(api.sequence.doc, makeSequenceHost(comp));
   } catch (err) {
     status.textContent = `${api.sequence.file}: ${err.message}`;
     console.error(err);
   }
   if (component !== comp) { seq?.dispose(); return; }   // the user moved on while we loaded
-  root.visible = true;
+  // A running sequence owns visibility from here (a flow may be starting on a
+  // different icon than the one the page loaded); only restore it ourselves
+  // when there is no sequence to hand it to.
+  if (!seq) root0.visible = true;
   comp.seq = seq;
   syncSequenceUI();
 }
@@ -659,17 +881,19 @@ function stopSequence() {
   syncSequenceUI();
 }
 
-// The transport is a design-review aid: drag = pause + seek, ▶/⏸ toggles.
-const seqUi = { time: -1, playing: null };   // what the transport last showed
+// The transport is a design-review aid: drag = pause + seek, ▶/⏸ toggles. It
+// scrubs the CURRENT phase — a flow's entrance or its transition — so its
+// range follows the phase, and it never writes persisted flow state.
+const seqUi = { time: -1, playing: null, duration: -1 };   // what the transport last showed
 function syncSequenceUI() {
   const s = component?.seq;
   seqWrap.style.display = s ? 'flex' : 'none';
-  if (!s) { seqUi.time = -1; seqUi.playing = null; return; }
+  if (!s) { seqUi.time = -1; seqUi.playing = null; seqUi.duration = -1; return; }
   seqScrub.max = s.duration;
   seqScrub.value = s.time;
-  seqTime.textContent = `${s.time.toFixed(2)} s`;
+  seqTime.textContent = s.flow ? `${s.time.toFixed(2)} s · ${s.step}` : `${s.time.toFixed(2)} s`;
   seqPlay.textContent = s.playing ? '⏸' : '▶';
-  seqUi.time = s.time; seqUi.playing = s.playing;
+  seqUi.time = s.time; seqUi.playing = s.playing; seqUi.duration = s.duration;
 }
 seqScrub.oninput = () => { const s = component?.seq; if (!s) return; s.pause(); s.seek(parseFloat(seqScrub.value)); syncSequenceUI(); };
 seqPlay.onclick = () => { const s = component?.seq; if (!s) return; s.playing ? s.pause() : s.play(); syncSequenceUI(); };
@@ -704,6 +928,10 @@ async function activateComponent(mod, name, assetPath) {
 // folder loaded with ?component=. It is the word the status line and the
 // unload entry use, so a pack loaded by URL is never called a zip.
 let zipState = null;   // { source, label, savedHTML, savedValue, savedSpin, icons }
+// True while the icon being activated was chosen by a human from the dropdown
+// rather than by the pack itself. A sequence flow uses it to jump to that
+// icon's step for design review — and never to write persisted state.
+let packIconPicked = false;
 
 function swapDropdown(label, iconNames) {
   if (!zipState.savedHTML) {
@@ -745,13 +973,15 @@ async function enterPack(label, icons) {
   await activatePackIcon(names[0]);
 }
 
-async function activatePackIcon(name) {
+async function activatePackIcon(name, picked = false) {
   unloadComponent(false, true);   // keep the backdrop while switching icons (no flash)
   status.textContent = `Loading ${name}…`;
   let api;
   try { api = await zipState.icons[name](); }
   catch (err) { status.textContent = `Icon ${name} failed: ${err.message}`; console.error(err); return; }
+  packIconPicked = picked;
   await applyComponentApi(api, name);
+  packIconPicked = false;
 }
 
 function unloadZip(reloadDefault) {
@@ -962,7 +1192,7 @@ const modelSrc = opt => opt.dataset.model || opt.value;
 modelSelect.onchange = () => {
   const v = modelSelect.value;
   if (v === '__unloadzip__') { unloadZip(true); return; }
-  if (v.startsWith('zipicon:')) { activatePackIcon(v.slice(8)); return; }
+  if (v.startsWith('zipicon:')) { activatePackIcon(v.slice(8), true); return; }
   const opt = modelSelect.selectedOptions[0];
   if (opt.dataset.sidecar) loadSidecarURL(opt.dataset.sidecar);
   loadURL(modelSrc(opt), opt.textContent);
@@ -1056,7 +1286,10 @@ renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   if ((current || component?.kind === 'object') && !paused)
     pivot.rotation.y += dt * parseFloat(speedInput.value);
-  try { component?.api.update?.(dt); } catch (e) { console.error('component update:', e); }
+  // `frozen` is set by a sequence for an icon it has landed in a slot: it must
+  // stop being updated BEFORE its resting orientation can stick, because the
+  // icon's own controller reassigns rotation every frame.
+  try { if (!component?.frozen) component?.api.update?.(dt); } catch (e) { console.error('component update:', e); }
   // The pack's own update runs FIRST (its controller assigns rotation), then
   // the sequence advances the wrapper/overlay. They never share a property.
   const seq = component?.seq;
@@ -1064,7 +1297,7 @@ renderer.setAnimationLoop(() => {
     if (seq.playing) seq.update(dt);
     // Keep the transport honest after a programmatic seek() too (e.g. from the
     // console); only touch the DOM when something actually changed.
-    if (seq.time !== seqUi.time || seq.playing !== seqUi.playing) syncSequenceUI();
+    if (seq.time !== seqUi.time || seq.playing !== seqUi.playing || seq.duration !== seqUi.duration) syncSequenceUI();
   }
   mixer?.update(dt);
   controls.update();

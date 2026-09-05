@@ -1,6 +1,6 @@
 ---
 name: author-icon-pack
-description: Build, validate, and test an icon-pack ZIP for this viewer — the icons.yml manifest (including the optional sequence key), the standard per-icon exports (createIconObject / loadIconGeometry / loadIconTextures / IconController / LAYOUT / setFade), packaging, and the zipfs service-worker path. Use when asked to create, fix, extend, or validate a pack or the zip drag-drop workflow. For the entrance choreography file itself, use author-sequence.
+description: Build, validate, and test an icon-pack ZIP for this viewer — the icons.yml manifest (including the optional sequence and glyphs keys), the standard per-icon exports (createIconObject / loadIconGeometry / loadIconTextures / IconController / LAYOUT / setFade), packaging, and the zipfs service-worker path. Use when asked to create, fix, extend, or validate a pack or the zip drag-drop workflow. For the choreography file itself, use author-sequence.
 ---
 
 # Authoring an icon pack
@@ -20,7 +20,7 @@ Spec reference: `AGENT.md` §7. Working example: `components/example-pack/`
 my-pack/
 ├── component.js        ← EXACT copy of components/pack.component.js. Never edit.
 ├── icons.yml
-├── sequence.yml        ← optional entrance choreography (author-sequence skill, AGENT.md §12)
+├── sequence.yml        ← optional choreography (author-sequence skill, AGENT.md §12)
 ├── backgrounds/        ← optional
 └── icons/
     ├── nameA/
@@ -49,6 +49,8 @@ icons:
 background: backgrounds/dusk.jpg
 backgrounds:
   nameB: "#05061a"
+glyphs:
+  nameA: glyphs/a.png         # optional — a 2D mark a sequence drops into a slot
 sequence: sequence.yml        # optional — see the author-sequence skill
 ```
 
@@ -57,17 +59,25 @@ console warning and will be unsupported in a future version. Rename it to
 `icons.yml`; the JSON is already valid YAML.)
 
 - `icons` — **required**, non-empty, and it is what drives the dropdown. A
-  folder under `icons/` that is not listed here is silently ignored.
+  folder under `icons/` that is not listed here is silently ignored. **Order
+  matters if the pack's sequence is a multi-step flow**: the viewer loads the
+  first icon listed, so put the flow's opening icon first.
 - `background` — optional, pack-wide. A path inside the zip **or** a CSS
   colour. The loader treats a value as a colour when it matches
   `/^(#|rgb|hsl)/i` or is a single all-alpha word (`"black"`); everything else
   is resolved as a path relative to `component.js`.
 - `backgrounds` — optional per-icon overrides, same value rules, falling back
   to `background`.
+- `glyphs` — optional per-icon 2D mark: always a path inside the pack (never a
+  colour), resolved relative to `component.js` and forwarded to the icon as
+  `api.glyph`. A sequence shows it in a slot once that icon has been collected
+  (`AGENT.md` §12.6). An icon with no entry gets a mark **derived** by the
+  viewer — rendered offscreen at preload — so this key is never required.
 - `sequence` — optional path (relative to `component.js`) of a `sequence.yml`
-  that choreographs each icon's entrance. The loader fetches and parses it and
-  hands it to every icon as `api.sequence`; the viewer plays it. Leave the key
-  out and nothing changes. Author the file with the `author-sequence` skill.
+  that choreographs each icon's entrance, and optionally a tap-advanced flow.
+  The loader fetches and parses it and hands it to every icon as
+  `api.sequence`; the viewer plays it. Leave the key out and nothing changes.
+  Author the file with the `author-sequence` skill.
 
 Keep background images web-sized — roughly a 2732-px-tall JPEG at quality ~80.
 
@@ -156,11 +166,13 @@ python3 .claude/tools/validate-pack.py my-pack.zip       # or the zip
 Stdlib Python 3, no install. It checks the entry module, that your
 `component.js` still matches the repo's copy, the manifest shape, that every
 listed icon has `src/index.js` exporting both required functions, that
-background paths exist in the pack, and warns about unlisted icon folders and
-oversized assets. With a `sequence:` key it also checks the file exists and
-validates its structure — that part needs PyYAML (`pip install pyyaml`, or run
-it with an interpreter that has it); without PyYAML it warns and skips only
-the sequence. Exit 0 = clean, 1 = errors, 2 = could not open.
+background and glyph paths exist in the pack, and warns about unlisted icon
+folders and oversized assets. With a `sequence:` key it also checks the file
+exists and validates its structure — slots, `to:`/`land:` targets and modes,
+the `advance`/`restart` verbs, every step's `icon:`, and `resume:`. That part
+needs PyYAML (`pip install pyyaml`, or run it with an interpreter that has
+it); without PyYAML it warns and skips only the sequence. Exit 0 = clean,
+1 = errors, 2 = could not open.
 
 ## Step 5 — package
 
@@ -224,7 +236,9 @@ c.api.object.rotation.y;
 If the pack has a sequence, the icon starts at its t=0 pose (faded out, 48 %
 scale in the example) and a hidden pane never advances it — scrub instead:
 `window.viewer.sequence.seek(3.0)` shows the held final frame (`AGENT.md`
-§12.7 has the full checklist).
+§12.11 has the full checklist). If the sequence is a flow, `await
+viewer.sequence.ready` first (it preloads every icon and captures its glyph),
+then drive it with `viewer.sequence.advance()` / `.restart()`.
 
 Only one pack is resident at a time — loading a new zip or unloading clears the
 whole `zipfs` cache.

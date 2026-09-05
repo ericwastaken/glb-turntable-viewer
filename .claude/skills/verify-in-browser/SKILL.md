@@ -22,6 +22,29 @@ python3 -m http.server 8000     # http://localhost:8000
 `.claude/launch.json` declares the same thing as the `viewer` configuration for
 harnesses that read launch configs.
 
+**If you are editing the app itself, serve with cache-busting headers.**
+`http.server` sends `Last-Modified` and the browser will happily keep serving a
+stale `sequence.js` or `index.html` across reloads — which looks exactly like a
+bug in the change you just made, and has cost a session an hour:
+
+```python
+# python3 serve.py  — same folder, but nothing is cached
+import http.server, os
+class H(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, must-revalidate')
+        super().end_headers()
+http.server.ThreadingHTTPServer(('127.0.0.1', 8000), H).serve_forever()
+```
+
+Confirm which build is actually running before you debug anything:
+
+```js
+performance.getEntriesByType('resource')
+  .filter(e => /sequence\.js/.test(e.name)).map(e => [e.transferSize, e.encodedBodySize]);
+// transferSize 0 = served from cache
+```
+
 ## 2. Load the route that exercises what you made
 
 | URL | Covers |
@@ -104,17 +127,44 @@ pane that pose *stays*, which looks like "the icon never appeared". Drive it:
 
 ```js
 const v = window.viewer, s = v.sequence, c = v.component;   // s is null without a sequence
-s.duration;                                     // e.g. 3
+await s.ready;                                  // preload + glyph capture, in a flow
+s.duration;                                     // e.g. 3 — the CURRENT phase
 s.pause(); s.seek(0);
 c.root.scale.x;                                 // 0.52 — the wrapper Group, not the icon
 c.api.object.material.opacity;                  // 0 (fallback fade on a standard material)
-document.querySelectorAll('#fg .fg-pip.on').length;             // 1
+[...document.querySelectorAll('#fg .fg-slot')].map(e => e.dataset.state);
+// ['is-next', 'is-pending', 'is-pending']
 s.seek(1.0);
 document.querySelector('#fg [data-seq="line1"]').style.clipPath; // mid-wipe, e.g. 'inset(0px 2.56% 0px 0px)'
 s.seek(3.0);
 document.querySelector('#fg [data-seq="cta"]').style.opacity;    // '1'
 s.seek(10); s.time;                             // 3 — `end: hold`
 ```
+
+**A flow** (a step whose `on:` uses `advance`) is driven, not clicked and
+hoped at. `s.duration` is the current phase, so it changes as you go:
+
+```js
+s.flow;                                    // true
+s.advance();  s.step; s.phase; s.duration; // 'two', 'transition', 3.35
+s.seek(0.70); s.slots;                     // [{icon:'twist', as:'object'}, null, null] — touchdown
+s.seek(1.15); s.slots[0].as;               // 'glyph' — the `after:` swap
+s.restart();  s.step; s.time; s.slots;     // 'one', 0, [null, null, null]
+// a landed icon must be OUT of the update path:
+const w = v.scene.getObjectByName('sequence-landed').children[0], o = w.children[0];
+const r0 = o.rotation.y;
+for (let i = 0; i < 60; i++) if (!v.component.frozen) v.component.api.update(1/60);
+o.rotation.y === r0;                       // true
+// the call-to-action must never move:
+document.querySelector('#fg [data-seq="cta"]').getBoundingClientRect();  // identical before and after
+// and the transport must never write persisted state:
+const saved = localStorage.getItem(s.storageKey);
+s.seek(1.4); s.play(); s.pause();
+localStorage.getItem(s.storageKey) === saved;   // true
+```
+
+`s.storageKey` is `null` unless the pack declared `resume:` — a pack that did
+not ask for persistence must leave `localStorage` completely empty.
 
 Two things a sequence must never change — assert them:
 
@@ -124,10 +174,11 @@ const cam = v.camera.position.clone(); s.seek(0); cam.equals(v.camera.position);
 ```
 
 A pack **without** `sequence:` must be untouched: `v.sequence === null`,
-`document.getElementById('fg').children.length === 0`, and neither
-`sequence.js` nor `animejs.esm.min.js` appears in
+`document.getElementById('fg').children.length === 0`, `localStorage` empty,
+and neither `sequence.js` nor `animejs.esm.min.js` appearing in
 `performance.getEntriesByType('resource')`. After `⏏ Unload`, `#fg` is empty
-again and `v.sequence` is `null`.
+again, `v.sequence` is `null`, and
+`v.scene.getObjectByName('sequence-landed')` is `undefined`.
 
 ## 5. Testing the zip / service-worker path
 

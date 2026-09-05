@@ -187,6 +187,7 @@ return {
   background,  // optional { image: url } or { color: '#05061a' }
   pointer,     // optional { down(x,y), move(x,y), up() }
   setFade(v),  // optional; 0–1 opacity setter a sequence calls (§12)
+  glyph,       // optional URL of a 2D mark a sequence drops into a slot (§12.6)
   sequence,    // optional { file, doc } — a parsed sequence.yml to play (§12)
 };
 ```
@@ -220,6 +221,11 @@ Verified specifics:
   2D overlay (§12). The stock pack loader sets it from the manifest; a
   single-file component may set it too. `setFade(v)` is how the sequence fades
   the object; without it the page fades standard materials itself (§12).
+- **`glyph`** is the URL of a flat 2D mark for this icon, which a sequence
+  shows in a slot once the icon has been collected (§12.6). The stock loader
+  sets it from the manifest's `glyphs:` map; with no glyph the viewer derives
+  one by rendering the icon offscreen at preload, so a pack never has to ship
+  one.
 - The **spin slider still applies** to a single-file component's `object` (the
   page rotates the pivot). A pack is different: it enters pack mode, which
   zeroes the slider — see §7.
@@ -301,11 +307,16 @@ icons:
 background: backgrounds/dusk.jpg          # optional, pack-wide
 backgrounds:                              # optional, per icon
   gem: backgrounds/alt.jpg
-sequence: sequence.yml                    # optional, entrance choreography (§12)
+glyphs:                                   # optional, per icon 2D mark (§12.6)
+  twist: glyphs/twist.png
+sequence: sequence.yml                    # optional, choreography (§12)
 ```
 
 - `icons` — **required**, non-empty list of folder names under `icons/`. An
-  icon folder not listed here is never loaded.
+  icon folder not listed here is never loaded. **Order matters when the pack's
+  sequence is a multi-step flow**: the viewer loads the first icon in this
+  list, so putting the flow's first step's icon first means nothing has to be
+  swapped at load (§12.7).
 - `sequence` — optional path, relative to `component.js`, of a YAML file the
   viewer plays as each icon's entrance (§12). The loader fetches and parses it
   once and hands it to every icon as `api.sequence = { file, doc }`; the page
@@ -317,6 +328,11 @@ sequence: sequence.yml                    # optional, entrance choreography (§1
   is resolved as a path relative to `component.js`.
 - `backgrounds` — optional per-icon overrides, same value rules; falls back to
   `background`.
+- `glyphs` — optional per-icon 2D mark: a path inside the pack (never a
+  colour), resolved relative to `component.js` and forwarded to the icon as
+  `api.glyph`. A sequence shows it in a slot once that icon has been collected;
+  an icon with no entry gets one **derived** by the viewer, so this key is
+  never required (§12.6).
 
 Keep background images web-sized — roughly a 2732-px-tall JPEG at quality ~80.
 
@@ -357,6 +373,8 @@ Loader behaviour worth knowing (all in `buildIcon()`):
   `api.setFade` so a sequence can fade the icon through your own material
   (the only route for a raw `ShaderMaterial`). Standard-material icons need
   nothing — the page fades them itself (§12).
+- The manifest's `glyphs:` entry for your icon, if any, is forwarded as
+  `api.glyph` (§12.6). Nothing in your module has to know about it.
 - **Icon modules may `import * as THREE from 'three'`** — the bare specifier
   resolves through the *page's* import map to `./vendor/three.module.min.js`,
   so every icon shares the viewer's single three.js instance. Both bundled
@@ -408,10 +426,13 @@ Stdlib Python 3, no install. It checks the entry module, that your
 `component.js` still matches the repo's copy, the manifest shape, that every
 listed icon has `src/index.js` exporting both required functions, that
 background paths exist in the pack, and warns about unlisted icon folders and
-oversized assets. If the manifest names a `sequence`, it checks the file exists
-and validates its structure (§12) — **that part needs PyYAML** (`pip install
-pyyaml`); without it the validator says so in a warning and skips only the
-sequence. Exit 0 = clean, 1 = errors, 2 = could not open.
+oversized assets, and that every `glyphs:` path is in the pack. If the manifest
+names a `sequence`, it checks the file exists and validates its structure (§12)
+— including slot declarations, `to:`/`land:` targets and modes, the `advance` /
+`restart` verbs, every step's `icon:`, and the `resume:` block. **That part
+needs PyYAML** (`pip install pyyaml`); without it the validator says so in a
+warning and skips only the sequence. Exit 0 = clean, 1 = errors, 2 = could not
+open.
 
 ### Packaging
 
@@ -540,16 +561,23 @@ the saved spin value, and the page's own background.
 
 Never judge a sequence by waiting — in a hidden pane the render loop does not
 advance it. Scrub it deterministically and read the results (full recipe in
-§12):
+§12.11):
 
 ```js
 const s = window.viewer.sequence;          // null if the icon has no sequence
-s.duration;                                // e.g. 3
+await s.ready;                             // preload + glyph capture, in a flow
+s.duration;                                // e.g. 3 — the CURRENT phase
 s.pause(); s.seek(0);                      // the t=0 pose
 window.viewer.component.root.scale.x;      // e.g. 0.52 — the wrapper, not the icon
 [...document.querySelectorAll('#fg [data-seq]')].map(e => [e.dataset.seq, e.style.opacity, e.style.clipPath]);
 s.seek(3.0);                               // the held final frame
+// a flow (a step whose `on:` uses advance): drive it, don't click and hope
+s.flow && s.advance(); s.step; s.slots;    // 'two', [{icon:'twist', as:'object'}, null, null]
 ```
+
+**Serve with cache-busting headers, or hard-reload after every edit.** A stale
+`sequence.js` out of the browser cache looks exactly like a bug in your
+sequence — and is the most expensive false lead in this repo.
 
 ### Always read the status line and the console
 
@@ -590,7 +618,11 @@ viewport and confirm the subject is still in frame — see §10.4.
 | **"My second pack replaced my first."** | Only one pack is resident at a time | §11 |
 | **"Nothing I set survives a reload."** | There is no persistence at all | §11 — put it in the URL (§4) |
 | **"My icon is invisible / tiny after the pack loads"** in a pane | The pack has a sequence, whose t=0 pose is faded-out and small; a hidden pane never advances it | §10.13 — `viewer.sequence.seek(t)` |
-| **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer | §12 — the message names the track |
+| **"My sequence's copy never appears."** Status names `sequence.yml` | A load-time error: undeclared target, unknown label, bad ease, wrong channel for the layer, a `to:` that names nothing | §12 — the message names the track |
+| **"My edit to `sequence.js` had no effect."** | The browser served the cached module | §12.11 — hard-reload, or serve with `Cache-Control: no-store` |
+| **"The collected icon lands but keeps spinning."** | It is still in the update path; its controller reassigns rotation every frame | §12.6 — `land.mode: object` freezes it first, orients it second |
+| **"A collected ring shows a broken image."** | Its glyph could not be derived, or the icon has no `glyphs:` entry and renders to nothing offscreen | §12.6 — ship a `glyphs:` image for that icon |
+| **"My flow resumed on the wrong step / did not resume."** | The saved state is discarded whenever `sequence.yml` moves on, and the TTL is an idle window | §12.8 |
 | **"My icon fades to nothing but still spins / my spin is gone."** | The sequence does not own spin; a `spin` channel does not exist. The icon's own controller owns rotation | §12 |
 
 ---
@@ -720,14 +752,17 @@ Verified against the source. Do not attempt these — they are not there to find
 - **One icon pack resident at a time.** `unloadZip()` deletes every key in the
   `zipfs` cache, and loading a new zip clears it first. Two packs cannot
   coexist, and a pack cannot reference another pack's files.
-- **Sequences are entrances, not a general animation system.** No `spin` /
-  rotation channel (ever — §12), no keyframes beyond `[from, to]`, no
-  step-to-step transitions, no camera moves, no springs. See §12 for the
-  exact vocabulary.
-- **No persistence.** No `localStorage`, no `sessionStorage`, no cookies, no
-  server. Spin speed, pivot mode, the loaded sidecar, the custom background,
-  and the loaded pack are all lost on reload. The only way to restore state is
-  to put it back in the URL (§4).
+- **Sequences are choreography, not a general animation system.** No `spin` /
+  rotation channel (ever — §12), no keyframes beyond `[from, to]`, no camera
+  moves, no springs, no `goto` verb. Step-to-step transitions exist, but only
+  in one direction and only through `advance` / `restart` (§12.7). See §12 for
+  the exact vocabulary.
+- **No persistence, unless a pack asks for it.** No cookies and no server. Spin
+  speed, pivot mode, the loaded sidecar, the custom background, and the loaded
+  pack are all lost on reload; the only way to restore those is the URL (§4).
+  The single exception is a sequence's opt-in `resume:` block, which stores one
+  small `localStorage` record of where the visitor is in a flow — off unless the
+  pack declares it (§12.8).
 - **No Draco / meshopt / KTX2 decoding.** Use uncompressed GLB. (Also noted in
   README's "Known limits".)
 - **No URL route for a zip.** A zip arrives only by drop or file picker.
@@ -736,12 +771,14 @@ Verified against the source. Do not attempt these — they are not there to find
 
 ---
 
-## 12. Sequences — a pack's entrance choreography (`sequence.yml`)
+## 12. Sequences — a pack's choreography (`sequence.yml`)
 
-A **sequence** is a small YAML file that describes how one icon *arrives*: the
+A **sequence** is a small YAML file that describes how an icon *arrives*: the
 3D icon fading and swelling in, lines of 2D copy resolving over the canvas, a
 call-to-action appearing — timed in seconds, with named easings and labels.
-It is optional, lives at the pack root, and is named from the manifest:
+Add an `advance` verb and it becomes a **flow**: tap, the icon flies into a
+slot and stays there, and the next icon enters behind it. It is optional,
+lives at the pack root, and is named from the manifest:
 
 ```yaml
 # icons.yml
@@ -754,7 +791,7 @@ worked example is `components/example-pack/sequence.yml`; run it with
 
 What it is **not** (each was decided, not forgotten — §11): it is not a
 general animation DSL, it never owns spin, it does not move the camera, and it
-has no keyframes, springs, or transitions between icons.
+has no keyframes beyond `[from, to]`.
 
 ### 12.1 Layer model
 
@@ -764,26 +801,32 @@ per layer rather than in one flat list.
 
 | Layer | What it is | Who owns it | What a sequence may do |
 |---|---|---|---|
-| **background** | `#bg`, the 2D backdrop behind the canvas | The page / the pack's `background:` | Nothing (Phase 1: not a target) |
-| **hud** | `pips` — a row of progress dots | Created from `stage.hud` | Static `initial:` state; 2D channels |
-| **icon** | The 3D icon, under a **wrapper Group** | The pack (look, spin, drag) — the sequence gets only the wrapper | `fade`, `scale`, `rise` |
+| **background** | `#bg`, the 2D backdrop behind the canvas | The page / the pack's `background:` | Nothing (not a target) |
+| **hud** | `slots` — a row of collection rings (and the deprecated `pips`) | Created from `stage.hud` | Static `initial:` state; 2D channels; receives a collected icon |
+| **icon** | The 3D icon, under a **wrapper Group** | The pack (look, spin, drag) — the sequence gets only the wrapper | `fade`, `scale`, `rise`, and `to:` (a move to a 2D element) |
 | **overlay** | `#fg` — 2D text and buttons above the canvas | Created from `stage.overlay` | `fade`, `rise`, `blur`, `wipe`, `bloom` |
 
 `#fg` is a fixed, viewport-sized DOM layer above the canvas (real text:
 selectable, accessible), `pointer-events: none` except on elements a step
-binds an action to, and emptied whenever the icon or pack unloads.
+binds an action to, and emptied whenever the icon or pack unloads. **It is
+built once and lives for the whole flow** — slots have to accumulate, and a
+call-to-action a visitor is about to tap must never be rebuilt under their
+finger.
 
 **Spin is structurally unavailable.** A pack's controller *assigns*
 `rotation.y` every frame from its own config, so anything a sequence wrote to
 rotation would be overwritten before render. There is no `spin`, `yaw`, or
 `rotation` channel, and there never will be. `scale`/`rise` go on the wrapper
-Group the page puts around `api.object`, never on the icon's own object.
+Group the page puts around `api.object`, never on the icon's own object. The
+single exception is a **landed** icon (§12.6): it is removed from the update
+path *first*, and only then given its resting orientation.
 
 **Framing is solved at rest pose, once, before the t=0 pose is applied, and
-never re-solved.** `frameComponent()` measures the object's *current* bounding
-box; an entrance that starts at `scale: 0.52` would otherwise be framed
-against a shrunken box. Verified: `camera.position` and `controls.target` are
-identical before and after `seek(0)`.
+never re-solved** — not even when a flow swaps to a different icon.
+`frameComponent()` measures the object's *current* bounding box; an entrance
+that starts at `scale: 0.52` would otherwise be framed against a shrunken box.
+Verified: `camera.position` and `controls.target` are identical before and
+after `seek(0)`. A flow's icons therefore share the first icon's framing.
 
 ### 12.2 The file, completely
 
@@ -796,12 +839,19 @@ version: 1                                # required; this viewer plays version 
 ease:
   swell:   &ease-swell   outCubic
   resolve: &ease-resolve outQuart
+  leave:   &ease-leave   inQuad
 
 # Capabilities this sequence needs. The only one today is icon.fade and the
-# only degrade is scale-only: if the icon cannot fade, the fade channel is
-# dropped from icon tracks, everything else plays, the console warns once.
+# only degrade is scale-only: if an icon cannot fade, the fade is dropped for
+# that icon, everything else plays, the console warns once per icon.
 requires:
   icon.fade: { degrade: scale-only }
+
+# OPT-IN persistence (§12.8). Absent — or `minutes: 0` — means NOTHING is
+# written to the visitor's browser.
+resume:
+  minutes: 60                             # idle window; TTL runs from the last state change
+  id: example-pack                        # localStorage key; defaults to the pack's name
 
 # Every name a track may target. Positions are viewport fractions of the
 # element's CENTER (like framing.verticalCenter); size is font size as a
@@ -809,25 +859,35 @@ requires:
 # landscape desktop still fits a portrait phone.
 stage:
   hud:
-    pips:  { type: pips, top: 0.13, size: 0.018 }
+    # `count` rings. Each ring is separately addressable as a `to:`
+    # destination under the element's name plus a 1-based index —
+    # here slot1, slot2, slot3.
+    slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.45,
+            color: "#e9e3f4", dim: "#e9e3f433" }
   icon:
-    ref: current                          # `current` = every icon; or one icon's name
+    ref: current                          # `current` = every icon; a flow requires `current`
   overlay:
     line1: { type: text, top: 0.735, size: 0.05, weight: 700, tracking: 0.12 }
     line2: { type: text, top: 0.805, size: 0.05, weight: 700, tracking: 0.12 }
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff" }
+    # persist: once it has arrived it is never hidden and never re-animated,
+    # so the tap target does not move between steps.
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff",
+             persist: true }
 
-# State at frame 0 — not motion. Pips take { filled, total }; any target may
-# also take channel values here (e.g. line1: { fade: 0 }).
+# State at frame 0 — not motion. Slots take `filled` (a count, or a list of
+# icon names); any target may also take channel values here (e.g. line1: { fade: 0 }).
 initial:
-  pips: { filled: 1, total: 3 }
+  slot: { filled: 0 }
 
 steps:
-  - id: intro                             # a step with no `icon:` is the default for every icon
-    copy:                                 # text for overlay elements (overrides the element's `text`)
+  # A flow step names the icon it shows: the sequence drives the viewer, not
+  # the other way round. The entrance is anchored so every step reuses it.
+  - id: one
+    icon: twist
+    copy:
       line1: "FIRST LINE OF COPY"
       line2: "SECOND LINE OF COPY"
-    timeline: &entrance                   # anchored so another step can reuse it
+    timeline: &entrance
       - id: icon-entrance
         target: icon
         at: 0.2                           # seconds, absolute
@@ -845,29 +905,74 @@ steps:
         at: copy-settled + 0.8            # 2.8 s, and it follows the copy if the copy moves
         timing: { dur: 0.2, ease: *ease-swell }
         channels: { fade: [0, 1], rise: [14, 0], bloom: [0, 1] }
-    on:
-      cta.tap: { do: replay }             # Phase 1 verbs: replay, nothing
-    end: hold                             # Phase 1: hold is the only end
 
-  - id: intro-gem                         # the step for one specific icon
+    # `exit:` plays when this step is LEFT. Same grammar as `timeline:`, plus
+    # the `to:` track — the general "send the 3D icon to a 2D element"
+    # primitive (§12.6).
+    exit:
+      - &copy-out
+        id: copy-out
+        target: [line1, line2]
+        at: 0
+        timing: { dur: 0.28, ease: *ease-leave }
+        channels: { fade: [1, 0], blur: [0, 10] }
+      - id: collect
+        target: icon                      # a `to:` track is always `target: icon`
+        to: slot1                         # ANY declared 2D element, ring or not
+        at: 0.1
+        timing: { dur: 0.6, ease: *ease-swell }
+        land:
+          mode:  object                   # object | glyph
+          face:  front                    # object mode: stop rotating, rest facing front
+          fit:   0.72                     # fraction of the target's inner diameter
+          after: glyph                    # optional: then become the flat mark…
+          delay: 0.45                     # …this long after touchdown (default 0.4)
+    on:
+      cta.tap: { do: advance }            # verbs: advance, restart, replay, nothing
+    end: hold                             # hold is the only end
+
+  - id: two
     icon: gem
-    copy: { line1: "A SECOND ICON", line2: "THE SAME CHOREOGRAPHY" }
+    overlap: 0.35                         # this entrance starts 0.35 s BEFORE the
+    copy:                                 # previous exit ends (§12.7)
+      line1: "A SECOND ICON"
+      line2: "THE SAME CHOREOGRAPHY"
     timeline: *entrance
-    on: { cta.tap: { do: replay } }
+    exit:
+      - *copy-out
+      - { id: collect, target: icon, to: slot2, at: 0.1,
+          timing: { dur: 0.6, ease: *ease-swell },
+          land: { mode: object, face: front, fit: 0.72 } }
+    on: { cta.tap: { do: advance } }
+    end: hold
+
+  # A flow step with NO `icon:` is a state, not an icon: nothing on the canvas,
+  # no copy, and the call-to-action still exactly where it has been. Its
+  # zero-length track matters only on a RESUME straight into this state.
+  - id: done
+    timeline:
+      - { id: cta-hold, target: cta, timing: { dur: 0 },
+          channels: { fade: 1, rise: 0, bloom: 1 } }
+    on: { cta.tap: { do: restart } }
     end: hold
 ```
 
-Top-level keys: `version`, `ease`, `requires`, `stage`, `initial`, `steps`.
-Anything else is ignored with a validator warning. Everything below the top
-level that is wrong — an undeclared target, a channel the layer does not have,
-an unknown label or ease, a non-numeric time — is a **load-time error, by
-name**, shown in the status line as `sequence.yml: sequence: steps.intro.
-timeline[3] (cta-in): target "ctaa" is not declared in stage:`.
+Top-level keys: `version`, `ease`, `requires`, `resume`, `stage`, `initial`,
+`steps`. Anything else is ignored with a validator warning. Everything below
+the top level that is wrong — an undeclared target, a channel the layer does
+not have, a `to:` that names nothing, an unknown landing mode or verb, a step
+naming an icon the pack does not have, an unknown label or ease, a non-numeric
+time — is a **load-time error, by name**, shown in the status line as
+`sequence.yml: sequence: steps.one.timeline[3] (cta-in): target "ctaa" is not
+declared in stage:`.
 
-**Which step plays.** For the icon being shown: the first step whose `icon:`
-names it, else the first step with no `icon:`; if neither exists the icon has
-no sequence. `stage.icon.ref` gates the whole file the same way (`current`, or
-one icon's name).
+**Which step plays.** In a **flow** the steps play in file order, starting at
+step 0 — or at a resumed step (§12.8), or at the step naming an icon a
+developer picked from the viewer's dropdown. Without a flow the behaviour is
+unchanged: the first step whose `icon:` names the loaded icon, else the first
+step with no `icon:`; if neither exists the icon has no sequence, and
+`stage.icon.ref` gates the whole file the same way (`current`, or one icon's
+name).
 
 ### 12.3 Channels, per layer
 
@@ -882,6 +987,9 @@ the timeline is *built* — i.e. its default or `initial:` value).
 | `fade` | 0–1 | `api.setFade(v)` if the icon provides it; else the standard-material fallback below; else dropped (`degrade: scale-only`) |
 | `scale` | multiplier | `wrapper.scale` (uniform) |
 | `rise` | world units | `wrapper.position.y` |
+
+Position and scale during a `to:` move are owned by that track, not by these
+channels — see §12.6.
 
 **`overlay` and `hud` (2D DOM)**
 
@@ -912,17 +1020,231 @@ look as final.
 - `at: after` (or no `at`) starts when the previous track in the list ends.
 - `- label: name` declares a time = the end of the previous track (or add
   `at:` to place it); `at: name + 0.3` / `at: name - 0.2` reference it.
-  Labels must be declared **above** the track that uses them.
+  Labels must be declared **above** the track that uses them, and are scoped
+  to the list they appear in (a `timeline:` and an `exit:` do not share them).
 - `stagger: s` with a list `target:` starts each successive target `s` later.
 - `timing: { dur, ease }` applies to the whole track — one gesture, N
   channels, so a fade and a scale cannot be desynced by accident.
 - `ease` is any Anime.js v4 name (`linear`, `in/out/inOut` × `Quad Cubic
   Quart Quint Sine Circ Expo Bounce Back Elastic`, …) or
   `cubic-bezier(a,b,c,d)`. Unknown names are load-time errors.
-- `duration` = the latest track end. `end: hold` clamps there; playback stops
-  and the final frame stays.
+- `duration` is the current **phase's** length, and `end: hold` clamps there.
+  A phase is either a step's entrance or a transition (an exit plus the next
+  entrance, overlapped) — so `viewer.sequence.duration` changes as a flow
+  moves on, and the HUD transport's range follows it.
 
-### 12.5 The fade contract
+### 12.5 Slots — a row of rings with three states
+
+```yaml
+stage:
+  hud:
+    slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.45,
+            color: "#e9e3f4", dim: "#e9e3f433", ring: 0.07 }
+```
+
+| Key | Meaning |
+|---|---|
+| `count` | how many rings (default 3) |
+| `size` | ring diameter *and* the row's font size, as a vmin fraction (1 em = one ring) |
+| `gap` | space between rings, in em (default 0.5) |
+| `color` | the BRIGHT colour: `next` and `filled` rings |
+| `dim` | the `pending` colour |
+| `ring` | border thickness in em (default 0.07) |
+
+The three states are a function of the **flow**, never of a counter:
+
+| State | Look | When |
+|---|---|---|
+| `pending` | dim ring, empty | not collected yet, and not the one being collected |
+| `next` | bright ring, empty | the first ring that is not filled — where the CURRENT icon will land |
+| `filled` | bright ring holding that icon's glyph | an icon has landed here |
+
+Because `next` is simply "the first unfilled ring", **the highlight moves at
+TOUCHDOWN, not when the fly begins** — there is no separate cue to keep in
+sync. `initial: { slot: { filled: 2 } }` starts with the first two rings
+filled from the flow's own step order; `filled: [twist, gem]` names them.
+
+Each ring is separately addressable as a `to:` destination under the
+element's name plus a 1-based index — a `slot` element with `count: 3` gives
+the targets `slot1`, `slot2`, `slot3`. A ring is *only* a destination: it has
+no channels and no `initial:` state of its own.
+
+> **Deprecated: `pips`.** The Phase 1 progress row (`{ type: pips }` with
+> `initial: { pips: { filled, total } }`) still works, unchanged, and the
+> validator warns. It has two states and cannot receive an icon; `slots`
+> replaces it.
+
+### 12.6 Sending the icon to a 2D element — `to:` and `land:`
+
+This is the general primitive, not a collect-flow special case: it moves the
+3D icon to **any declared 2D element**, in a straight line, shrinking as it
+goes so it lands inside.
+
+```yaml
+- id: collect
+  target: icon                # always `icon`; a `to:` track carries no `channels:`
+  to: slot2                   # any declared 2D element (a ring, a text line, the CTA)
+  at: 0.1
+  timing: { dur: 0.6, ease: outCubic }
+  land:
+    mode:  object             # object | glyph          (default object)
+    face:  front              # object mode's rest orientation (only `front`)
+    fit:   0.72               # fraction of the target's inner diameter (default 0.72)
+    after: glyph              # optional; only after an object landing
+    delay: 0.45               # seconds after touchdown for `after:` (default 0.4)
+```
+
+**How the destination is computed.** At the moment the transition is built,
+the target element's centre is read with `getBoundingClientRect()`, converted
+to NDC, and unprojected onto the plane through the icon's current position
+perpendicular to the camera's view direction — so both ends of the flight sit
+at the same depth and a linear tween of x, y and z is a straight line on
+screen. Measured over the example pack's 0.6 s collect: maximum deviation from
+the straight line **4.8 × 10⁻¹⁷ world units** — floating-point noise. The stage
+is persistent and the rings never move, so one measurement holds for the whole
+flight.
+
+**How the fit is computed.** The icon's visible radius is taken from each
+mesh's **geometry bounding sphere**, expressed about the wrapper's own origin
+(`|offset| + radius`, in wrapper-local units) — not from an axis-aligned box,
+whose size swings by ~20 % with orientation while the icon's controller is
+still spinning it. Halos and outer shells are meshes, so they count. That
+radius is projected to pixels at the destination depth and scaled so the
+visible diameter is `fit ×` the target's inner diameter (its border box minus
+its border). Measured on both landing icons of the example pack, desktop and
+phone: **0.7200** of a 52 px inner circle at 1280×800, and of a 25.13 px inner
+circle at 375×812.
+
+**Landing modes.**
+
+| `mode` | What is in the ring afterwards |
+|---|---|
+| `object` | the real 3D object, live but **frozen**: removed from the per-frame update path and *then* set to its resting orientation (`rotation.y = 0`) |
+| `glyph` | a flat 2D mark; the 3D object is released (hidden and never updated again) at touchdown |
+| `object` + `after: glyph` | an object landing, swapped for the glyph `delay` seconds later — the 3D motion without paying for a permanently live shader |
+
+The order in `object` mode is the whole trick: an icon that is still being
+updated cannot be given a resting orientation, because its own controller
+reassigns `rotation.y` on the very next frame. Verified: 60 update ticks after
+a landing leave the landed icon's rotation and scale bit-identical.
+
+Landed icons are reparented into a `sequence-landed` Group under the pivot, so
+several icons can be on screen at once (the viewer otherwise holds exactly
+one). Only the ACTIVE icon's `update(dt)` runs.
+
+**Glyphs — two sources, in this order.**
+
+1. **Provided.** A `glyphs:` map in `icons.yml`, exactly like `backgrounds:`:
+
+   ```yaml
+   glyphs:
+     twist: glyphs/twist.png
+   ```
+
+   Paths are relative to `component.js` and must exist in the pack; the loader
+   resolves each to an absolute URL and forwards it as `api.glyph`.
+
+2. **Derived.** With no entry, the viewer renders the icon once to an offscreen
+   256 × 256 render target at its **front** orientation and keeps the result as
+   a PNG data URL. **This happens at PRELOAD, not at land time**, so every mark
+   is framed the same way and none of them depends on where the icon happened
+   to be rotated when it was collected. The icon is forced to `fade: 1` for the
+   capture and put straight back — capture it at a t=0 pose and the mark comes
+   back literally empty (measured: alpha coverage 0.0000).
+
+   A pack needs no new assets for this to work. An icon whose look depends
+   heavily on a backdrop (deep transmission, say) may derive a faint mark —
+   ship a `glyphs:` image for it.
+
+### 12.7 Flows — steps, `advance`, `restart`, overlap, preloading
+
+**A sequence becomes a flow as soon as a step's `on:` uses `advance` or
+`restart`.** There is no separate switch. Without one of those verbs nothing
+changes: one step plays, exactly as it did in Phase 1.
+
+In a flow:
+
+- **Steps play in file order** and each one names the `icon:` it shows — the
+  sequence drives which icon the viewer displays, inverting the Phase 1
+  relationship. Every named icon must be in the pack. `stage.icon.ref` must be
+  `current`.
+- **Put the first step's icon first in `icons.yml`.** The viewer loads the
+  pack's first icon; if step 0 names a different one the flow acquires and
+  swaps it, which is correct but shows an empty stage for a few milliseconds.
+- **The stage is persistent.** Slots accumulate; nothing is torn down and
+  rebuilt between steps. Copy text is swapped on the same DOM nodes.
+- **`persist: true`** on an element means: once a track has brought it in, every
+  later step skips its tracks and leaves it where it is. This is how a
+  call-to-action stays put — verified, its bounding rect is byte-identical
+  before the first tap and at the end of the flow.
+- **The last step should have no `icon:`.** A step with no icon is a state:
+  nothing on the canvas, no copy (give it no `copy:`), the call-to-action
+  still there, and `on: { cta.tap: { do: restart } }`.
+
+**The verbs.**
+
+| Verb | What it does |
+|---|---|
+| `advance` | commit the current step's landing, then play a **transition**: this step's `exit:`, and the next step's `timeline:` overlapped into it. Persists. Ignored while a transition is still running — the icon in flight owns the stage until it lands |
+| `restart` | slots empty **instantly** (state, not animation), every icon back to rest and hidden, step 0's entrance from t = 0. Persists. A `persist:` element that has already arrived stays arrived, so the CTA does not blink |
+| `replay` | `seek(0)` + play on the current phase. Unchanged from Phase 1 |
+| `nothing` | declared and inert |
+
+**Overlap.** One number, on the **incoming** step:
+
+```yaml
+- id: two
+  icon: gem
+  overlap: 0.35     # this entrance starts 0.35 s BEFORE the previous exit ends
+```
+
+`0` (the default) is strictly sequential; a value ≥ the exit's length starts
+both at t = 0. It exists as a single number precisely so a review note ("let
+the next one come in sooner") is a one-line change. Measured on the example
+pack: the exit ends at 0.70 s, so the incoming entrance begins at 0.35 s and
+the whole transition is 3.35 s.
+
+**Preloading.** Every icon in the pack is built once, up front, behind the
+first step's entrance — and its glyph captured at the same moment — so a tap
+never stalls on a geometry build. `viewer.sequence.ready` is the promise.
+Icons are singletons for the life of the pack: `restart` returns them to rest
+rather than rebuilding them.
+
+### 12.8 Resume — opt-in persistence
+
+The viewer stores **nothing** by default, and a sequence changes that only if
+the pack asks:
+
+```yaml
+resume:
+  minutes: 60          # absent, or 0 = never persist
+  id: example-pack     # localStorage key; defaults to the pack's name
+```
+
+- The key is `glb-viewer:seq:<id>`. The value is
+  `{"v":1,"step":"two","slots":["twist",null,null],"t":1788574555367}` —
+  schema version, the current step's id, one icon name (or `null`) per ring,
+  and a millisecond timestamp.
+- **Written on every state change, and only by `advance` and `restart`.** The
+  dev transport — scrubbing, ▶/⏸, and picking an icon from the dropdown —
+  never writes. Developer inspection must not overwrite a visitor's state.
+- The **TTL runs from the last state change**, not from the first: it is an
+  idle window, so someone actively tapping is never cut off.
+- On load a saved state is **discarded, never repaired**, if it is older than
+  `minutes`, if its schema version is not 1, if its `step` id no longer exists,
+  if the ring count changed, or if it names an icon the pack no longer has.
+  Editing `sequence.yml` must not strand a visitor on a step that is gone.
+- **On resume the current step's entrance replays** with the rings already
+  filled — no re-collection animation. Filled rings show **glyphs**; a landed
+  3D object is not restored across a reload.
+- Every read and write is wrapped in `try`/`catch`. A private window and
+  blocked site data both throw on access, and the only correct response is to
+  carry on with no persistence.
+
+This is the one place the viewer touches browser storage; it is documented in
+`README.md` as user-visible behaviour for that reason.
+
+### 12.9 The fade contract
 
 1. **Preferred:** the icon's `createIconObject()` return value has
    `setFade(v)`; the stock loader forwards it as `api.setFade`, and the
@@ -934,76 +1256,136 @@ look as final.
    `MeshBasicMaterial` instances, and while the fade is in flight sets
    `transparent = true` and `opacity = original × v`; at `v ≥ 0.999` it
    restores the material's own `transparent`/`opacity`, so the resting look is
-   pixel-identical to a pack without a sequence. Verified on both example
-   icons (`MeshPhysicalMaterial` with transmission, `MeshStandardMaterial`).
+   pixel-identical to a pack without a sequence. Verified on all three example
+   icons.
 3. **Degrade:** neither is possible → `requires.icon.fade.degrade:
-   scale-only` drops the `fade` channel from icon tracks, keeps everything
-   else, and warns once in the console. Any other `degrade` value is an error.
+   scale-only` drops the `fade` for that icon, keeps everything else, and
+   warns once **per icon** in the console. Any other `degrade` value is an
+   error. In a flow the capability is per icon, not per pack.
 
-### 12.6 Runtime and `window.viewer.sequence`
+### 12.10 Runtime and `window.viewer.sequence`
 
 The page imports `sequence.js` (and the vendored Anime.js 4.5.0) **only when a
 loaded icon carries `api.sequence`** — check the network panel on a pack
-without the key: neither file is requested. The runtime compiles the step into
-an Anime.js timeline created with `autoplay: false` and drives it with
-`tl.seek(t × 1000)` from the render loop's accumulated `dt` — never anime's
-own ticker, whose engine therefore never starts (`engine.reqId` stays 0). The
-pack's `update(dt)` runs first each frame (its controller assigns rotation),
-then the sequence writes the wrapper and overlay; they share no property.
+without the key: neither file is requested. The runtime compiles the current
+**phase** into an Anime.js timeline created with `autoplay: false` and drives
+it with `tl.seek(t × 1000)` from the render loop's accumulated `dt` — never
+anime's own ticker, whose engine therefore never starts (`engine.reqId` stays
+0). One timeline per phase, never one per track, so `seek(t)` stays exact in
+both directions. The pack's `update(dt)` runs first each frame (its controller
+assigns rotation), then the sequence writes the wrapper and overlay; they share
+no property.
 
 ```js
 const s = window.viewer.sequence;   // null when the icon has no sequence
-s.duration;         // seconds, e.g. 3
+s.duration;         // seconds — the CURRENT phase, e.g. 3 or 3.35
 s.time;             // current time, clamped to [0, duration]
 s.playing;          // false once `end: hold` is reached, or after pause()
 s.seek(t);          // exact: renders every target for time t, in either direction
 s.play();           // from the end, restarts at 0
 s.pause();
-s.step;             // id of the step chosen for this icon
-s.targets;          // ['pips','line1','line2','cta','icon']
+s.flow;             // true when a step's `on:` uses advance/restart
+s.step;             // id of the current step, e.g. 'two'
+s.stepIndex;        // its index
+s.phase;            // 'entrance' | 'transition'
+s.slots;            // [{icon:'twist', as:'glyph'}, null, null] at the current time
+s.icons;            // every icon in the pack, in manifest order
+s.advance();        // the verbs, for scripted checks — these DO persist
+s.restart();
+s.ready;            // promise: preload + glyph capture done
+s.storageKey;       // 'glb-viewer:seq:example-pack', or null when resume is off
+s.saved;            // the parsed stored state, or null
+s.targets;          // ['slot','slot1','slot2','slot3','line1','line2','cta','icon']
 s.states;           // { name: { channel: value } } snapshot, for assertions
-s.warnings;         // e.g. the degrade notice
+s.warnings;
 ```
 
-A small transport (▶/⏸ + slider + time) appears in the HUD while a sequence
-is loaded; dragging the slider pauses and seeks. It exists for design review
-and is deliberately minimal.
+A small transport (▶/⏸ + slider + time, plus the step id in a flow) appears in
+the HUD while a sequence is loaded; dragging the slider pauses and seeks. It
+scrubs the current phase, exists for design review, and never writes state.
 
-### 12.7 Verifying a sequence deterministically
+### 12.11 Verifying a sequence deterministically
 
 A hidden pane never advances the render loop (§10.1, §10.13), so drive time
-yourself. Against the example pack:
+yourself. **Serve with cache-busting headers or hard-reload after every edit** —
+a stale `sequence.js` from the browser cache will have you debugging code that
+is not running (this cost a session an hour).
+
+Against the example pack:
 
 ```js
 const v = window.viewer, s = v.sequence, c = v.component;
+await s.ready; s.pause();
+
+// --- step 1
+s.seek(0);
 s.duration;                                     // 3
-s.pause(); s.seek(0);
-c.root.scale.x;                                 // 0.52  (wrapper — the icon's own scale is untouched)
-c.api.object.material.opacity;                  // 0     (fallback fade; transparent === true)
-document.querySelectorAll('#fg .fg-pip.on').length;             // 1 of 3
-document.querySelector('#fg [data-seq="line1"]').style.opacity; // '0'
-s.seek(0.55);  c.root.scale.x;                  // 0.935
-s.seek(1.0);   document.querySelector('#fg [data-seq="line1"]').style.clipPath; // 'inset(0px 2.56% 0px 0px)'
-s.seek(2.2);   document.querySelector('#fg [data-seq="cta"]').style.opacity;    // '0'
-s.seek(3.0);   document.querySelector('#fg [data-seq="cta"]').style.filter;     // 'drop-shadow(…) drop-shadow(…)'
-s.seek(10);    s.time;                          // 3 — held
-// spin is the controller's, not the sequence's (gem icon):
+c.root.scale.x;                                 // 0.52  (the wrapper; the icon's own scale is untouched)
+[...document.querySelectorAll('#fg .fg-slot')].map(e => e.dataset.state);
+// ['is-next', 'is-pending', 'is-pending']
+s.seek(3);
+const before = document.querySelector('#fg [data-seq="cta"]').getBoundingClientRect();
+
+// --- tap to advance
+document.querySelector('#fg [data-seq="cta"]').click();
+s.duration;                                     // 3.35  (exit 0.70 + entrance, overlapped by 0.35)
+s.seek(0.30);  s.slots;                         // [null, null, null] — still in the air
+s.seek(0.35);  c.root.scale.x;                  // 0.52 — icon 2's entrance has begun
+s.seek(0.70);  s.slots;                         // [{icon:'twist', as:'object'}, null, null]
+[...document.querySelectorAll('#fg .fg-slot')].map(e => e.dataset.state);
+// ['is-filled', 'is-next', 'is-pending']
+s.seek(1.15);  s.slots[0].as;                   // 'glyph' — the after: swap, 0.45 s later
+document.querySelector('#fg [data-seq="cta"]').getBoundingClientRect().top === before.top;  // true
+
+// --- a landed object is out of the update path
+const w = v.scene.getObjectByName('sequence-landed').children[0], o = w.children[0];
+const r0 = o.rotation.y;
+for (let i = 0; i < 60; i++) if (!v.component.frozen) v.component.api.update(1/60);
+o.rotation.y === r0 && r0 === 0;                // true — frozen, resting at front
+
+// --- the end, and restart
+s.seek(s.duration); document.querySelector('#fg [data-seq="cta"]').click();  // → three
+s.seek(s.duration); document.querySelector('#fg [data-seq="cta"]').click();  // → done
+s.step;                                         // 'done'
+document.querySelector('#fg [data-seq="line1"]').textContent;   // '' — no copy
+document.querySelector('#fg [data-seq="cta"]').style.opacity;   // '1' — the CTA stays
+document.querySelector('#fg [data-seq="cta"]').click();         // restart
+s.step; s.time; s.slots;                        // 'one', 0, [null, null, null]
+
+// --- persistence
+s.storageKey;                                   // 'glb-viewer:seq:example-pack'
+s.saved;                                        // { v:1, step:'one', slots:[null,null,null], t: … }
+const before2 = localStorage.getItem(s.storageKey);
+s.seek(1.4); s.play(); s.pause();
+localStorage.getItem(s.storageKey) === before2; // true — the transport never writes
+```
+
+Then the invariants that must survive any change:
+
+```js
+// spin is the controller's, not the sequence's:
 const r = c.api.object.rotation.y; s.seek(2); s.seek(0); c.api.object.rotation.y === r;  // true
-c.api.update(1.0); c.api.object.rotation.y;     // 0.8 — only update(dt) moves it
+c.api.update(1.0);                                  // only update(dt) moves it
+// framing is solved at rest pose, once:
+const cam = v.camera.position.clone(); s.seek(0); cam.equals(v.camera.position);         // true
+// a pack with no sequence loads neither module:
+performance.getEntriesByType('resource').map(e => e.name).filter(n => /sequence\.js|anime/i.test(n));  // []
 ```
 
 Unloading (`⏏ Unload …`, or loading any model) disposes the sequence, empties
-`#fg`, restores the wrapper to scale 1 and the materials to their own flags,
-and `viewer.sequence` is `null` again.
+`#fg`, releases every icon the flow acquired, removes the `sequence-landed`
+Group, restores the wrapper to scale 1 and the materials to their own flags,
+and `viewer.sequence` is `null` again. Verified: `#fg` empty, no landed group,
+transport hidden, nothing left in `localStorage`.
 
-### 12.8 Deliberately not in Phase 1
+### 12.12 Deliberately not supported
 
 Keyframes beyond `[from, to]`; `shift`/`scale` on 2D elements; a `background`
-target; step-to-step transitions and the `advance`/`goto` verbs (`on:` accepts
-`replay` and `nothing`); taps on the icon (the canvas belongs to the icon's
-controller); springs; responsive variants; any URL parameter — a sequence
-arrives only inside a pack. If a request needs one of these, say so rather
-than approximating it.
+target; springs; responsive variants; taps on the icon (the canvas belongs to
+the icon's controller); a `goto <step>` verb (steps advance in order, or
+restart); restoring a landed 3D object across a reload (a resumed ring shows
+its glyph); any URL parameter — a sequence arrives only inside a pack. If a
+request needs one of these, say so rather than approximating it.
 
 ---
 
@@ -1029,6 +1411,7 @@ components/
   example-shader-orb.js        minimal single-file component example
   pack.component.js            the stock pack loader — copied into every pack
   example-pack/                source of the example pack (unzipped), incl. sequence.yml
+                               3 procedural icons: twist, gem, prism
   example-pack.zip             the same pack, zipped, for the drag-drop demo
 README.md                      user-facing docs (designers + component authors)
 CONTRIBUTING.md                background notes for a human contributor (not rules)
@@ -1054,6 +1437,7 @@ Where to look when the docs above are not enough:
 | Which sidecar properties does the linter recognise? | `PROP_TYPES`, near the top of the sidecar-linter section |
 | How is my zip unpacked and served? | `loadZipFile()` in `index.html`, plus `sw.js` |
 | How is my sequence compiled and played? | `createSequence()` in `sequence.js`; `startSequence()` / the render loop in `index.html` |
+| How does an icon get sent into a slot, and how is a glyph made? | `makeSequenceHost()` in `index.html` — `planMove()`, `iconRadius()`, `setFrozen()`, `glyphFor()` |
 | What does the viewer support at all? | `README.md`, and §11 above for what it does not |
 
 ---

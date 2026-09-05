@@ -32,7 +32,7 @@ Full contents:
    [standard exports](#standard-exports) ·
    [packaging](#packaging-a-multi-icon-zip-step-by-step) ·
    [loading](#loading-it-on-the-page) ·
-   [sequences](#sequences-choreographing-an-icons-entrance)
+   [sequences](#sequences-choreographing-an-icons-entrance--and-a-collect-flow)
 6. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
 
 ## Run it locally
@@ -99,7 +99,7 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 | Path | What |
 |---|---|
 | `index.html` | The page (markup, styles, and module script). |
-| `sequence.js` | Plays a pack's optional `sequence.yml` (entrance choreography); loaded only when a pack has one. |
+| `sequence.js` | Plays a pack's optional `sequence.yml` (entrance choreography and multi-step collect flows); loaded only when a pack has one. |
 | `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment; fflate (MIT) for zips; js-yaml 5.4.1 (MIT) for pack manifests and sequences; Anime.js 4.5.0 (MIT) for sequence timelines. All self-hosted. |
 | `backgrounds/` | `starfield-default.jpg` — synthetic starfield (generated, 4096×2732), the default backdrop. |
 | `models/` | Sample models from [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets): glass/transmission tests (DragonAttenuation, MosquitoInAmber, GlassVaseFlowers, GlassHurricaneCandleHolder, IridescentDishWithOlives, DispersionTest) plus DamagedHelmet (PBR). |
@@ -204,16 +204,17 @@ imports and asset paths work untouched; nothing is uploaded anywhere.
 
 Download
 [`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
-(8.6 KB — two procedural icons, the pack's own background, and an entrance
+(11 KB — three procedural icons, the pack's own background, and a three-step
 sequence; no per-icon asset files) and drag it onto
 [the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
-dropdown switches to the pack's icons ("twist" and "gem") plus an
+dropdown switches to the pack's icons ("twist", "gem" and "prism") plus an
 "⏏ Unload zip" entry. While a pack is loaded, the turntable and sidecar
 controls hide — a pack owns its own motion, materials, and framing.
 
 Its source is [`components/example-pack/`](components/example-pack/): copy
 that folder as the skeleton for a real pack. `icons/twist` is the minimal
-icon (two required exports); `icons/gem` adds the optional motion controller.
+icon (two required exports); `icons/gem` and `icons/prism` add the optional
+motion controller.
 
 ### Zip layout
 
@@ -221,7 +222,7 @@ icon (two required exports); `icons/gem` adds the optional motion controller.
 my-icons.zip
 ├── component.js       ← the universal pack loader: copy components/pack.component.js, never edit it
 ├── icons.yml          ← icons: [nameA, nameB]   background: backgrounds/sky.jpg   sequence: sequence.yml
-├── sequence.yml       ← optional: how each icon ENTERS (fade/scale in, copy, call-to-action)
+├── sequence.yml       ← optional: how icons ENTER, and how a tap collects them
 ├── backgrounds/       ← optional images referenced from icons.yml
 └── icons/
     ├── nameA/
@@ -293,13 +294,14 @@ is simply what makes the pack portable.
 Adding an icon to an existing pack: drop its folder under `icons/`, add its
 name to `icons.yml`, re-compress, drag the new zip onto the page.
 
-### Sequences: choreographing an icon's entrance
+### Sequences: choreographing an icon's entrance — and a collect flow
 
 A pack may ship a **`sequence.yml`** — a small, commented YAML file that says
 how an icon *arrives*: the 3D icon fading and swelling in, lines of copy
 resolving over the canvas, a call-to-action appearing, all timed in seconds.
-Name it from the manifest and the viewer plays it whenever one of the pack's
-icons is shown:
+Add an `advance` verb and it becomes a **flow**: tapping the call-to-action
+sends the icon flying into a slot, where it stays, and brings the next icon in
+behind it. Name the file from the manifest and the viewer plays it:
 
 ```yaml
 # icons.yml
@@ -310,30 +312,58 @@ sequence: sequence.yml
 # sequence.yml (abridged — the example pack's file is fully commented)
 version: 1
 ease: { swell: &swell outCubic }
+resume: { minutes: 60 }            # optional; see "What it stores" below
 stage:
-  hud:     { pips:  { type: pips, top: 0.13, size: 0.018 } }
+  hud:     { slot:  { type: slots, count: 3, top: 0.14, size: 0.075 } }
   icon:    { ref: current }
   overlay:
     line1: { type: text, top: 0.735, size: 0.05 }
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→" }
-initial: { pips: { filled: 1, total: 3 } }
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", persist: true }
 steps:
-  - id: intro
+  - id: one
+    icon: twist
     copy: { line1: "FIRST LINE OF COPY" }
-    timeline:
+    timeline: &entrance
       - { id: icon-in, target: icon,  at: 0.2, timing: { dur: 0.7, ease: *swell }, channels: { fade: [0, 1], scale: [0.52, 1] } }
       - { id: copy-in, target: line1, at: 0.4, timing: { dur: 1.0, ease: outQuart }, channels: { blur: [12, 0], wipe: [0, 1], fade: [0, 1] } }
       - label: copy-settled
       - { id: cta-in,  target: cta,   at: copy-settled + 0.8, timing: { dur: 0.2, ease: *swell }, channels: { fade: [0, 1], rise: [14, 0], bloom: [0, 1] } }
-    on: { cta.tap: { do: replay } }
+    exit:
+      - { id: copy-out, target: line1, at: 0, timing: { dur: 0.28 }, channels: { fade: [1, 0], blur: [0, 10] } }
+      - { id: collect,  target: icon,  to: slot1, at: 0.1, timing: { dur: 0.6, ease: *swell },
+          land: { mode: object, face: front, fit: 0.72, after: glyph } }
+    on: { cta.tap: { do: advance } }
+    end: hold
+
+  - id: two
+    icon: gem
+    overlap: 0.35                  # start this entrance 0.35 s before the last exit ends
+    copy: { line1: "A SECOND ICON" }
+    timeline: *entrance
+    exit:
+      - { id: collect, target: icon, to: slot2, at: 0.1, timing: { dur: 0.6, ease: *swell },
+          land: { mode: glyph, fit: 0.72 } }
+    on: { cta.tap: { do: restart } }
     end: hold
 ```
 
 - The 3D icon gets `fade`, `scale`, `rise`; 2D text and buttons get `fade`,
   `rise`, `blur`, `wipe`, `bloom`. Times are seconds; `at:` can be a number,
   `after`, or `label + 0.3`. Easings are Anime.js names or `cubic-bezier()`.
+- **Slots** are a row of rings with three states — dim and empty (`pending`),
+  bright and empty (`next`, where the current icon will land), and bright with
+  the icon's 2D mark in it (`filled`). Each ring is a target in its own right
+  (`slot1`, `slot2`, …).
+- **`to:` sends the icon to any 2D element**, in a straight line, shrinking so
+  it fits inside. It can stay there as the real 3D object (frozen, facing
+  front), become a flat mark, or land as the object and flatten a beat later.
+- **The marks are free.** Give an icon a `glyphs:` entry in `icons.yml` and
+  that image is used; give it nothing and the viewer renders one for you,
+  offscreen, before the flow starts.
 - **The sequence never owns spin.** Your icon's own controller keeps turning
-  it; the sequence only stages the entrance. There is no rotation channel.
+  it; there is no rotation channel. The one exception is an icon that has
+  landed in a slot — it is taken out of the animation loop first, then parked
+  facing front.
 - Fading works out of the box for icons built from three.js standard
   materials. An icon with its own shader material should expose `setFade(v)`
   on the object it returns; otherwise the fade is skipped and the console says
@@ -341,6 +371,16 @@ steps:
 - A ▶/⏸ button and a scrub slider appear in the HUD while a sequence is
   loaded, for design review. Text is real, selectable DOM.
 - No `sequence:` key → nothing changes; existing packs are untouched.
+
+**What it stores.** The viewer normally stores nothing at all. The one
+exception is a pack that opts in with `resume: { minutes: 60 }`: while a flow
+is running, one small `localStorage` record — which step you are on, which
+icons you have collected, and when — is kept under
+`glb-viewer:seq:<pack name>`, so reloading picks up where you left off. It is
+written only when you actually advance or restart, it expires after the
+declared idle window, and it is discarded outright if the pack's
+`sequence.yml` has changed underneath it. A pack without `resume:` writes
+nothing, and nothing is ever sent anywhere.
 
 The full schema, channel tables, and a deterministic way to verify a sequence
 live in [`AGENT.md`](AGENT.md) §12. `validate-pack.py` checks `sequence.yml`
@@ -362,5 +402,5 @@ viewer will say so rather than fail silently.
 - No Draco/meshopt decoders: use uncompressed GLB files, or add `DRACOLoader`
   plus the wasm decoder to `vendor/`.
 - No KTX2 texture support (same deal: add `KTX2Loader` if needed).
-- Sequences are entrances only: no rotation channel, no keyframes beyond
-  `[from, to]`, no transitions between icons, no camera moves.
+- Sequences never own rotation, and have no keyframes beyond `[from, to]`,
+  no camera moves, and no `goto` — steps run in order, or restart.

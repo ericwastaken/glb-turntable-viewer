@@ -25,9 +25,16 @@ Quick orientation while you fetch it:
   browser pane pauses `requestAnimationFrame`, so waiting and then reading a
   rotation gives a false negative.
 - `AGENT.md` §11 lists what the viewer deliberately does not do; §12 is the
-  sequence format (`sequence.yml`, an icon pack's entrance choreography) —
+  sequence format (`sequence.yml`, an icon pack's choreography: an entrance,
+  and optionally a tap-advanced flow that collects each icon into a slot) —
   it never owns spin, and it is verified with `viewer.sequence.seek(t)`, not
   by waiting.
+- **The viewer stores nothing** unless a pack's sequence opts in with a
+  `resume:` block (`AGENT.md` §12.8). Keep it that way: this is a public tool,
+  and a visitor's browser is not scratch space.
+- Serve with cache-busting headers while you work on `sequence.js` or
+  `index.html`. A stale module from the browser cache looks exactly like a bug
+  in your code (`AGENT.md` §12.11).
 
 Repeatable authoring workflows are packaged as skills under `.claude/skills/`:
 `author-sidecar`, `author-component`, `author-icon-pack`, `author-sequence`,

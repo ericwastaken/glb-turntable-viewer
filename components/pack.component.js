@@ -20,6 +20,7 @@
 //   icons.yml             icons: [nameA, nameB, ...]                    required
 //                         background: backgrounds/sky.jpg               optional, pack-wide
 //                         backgrounds: { nameB: backgrounds/alt.jpg }   optional, per icon
+//                         glyphs: { nameA: glyphs/a.png }               optional, per icon 2D mark
 //                         sequence: sequence.yml                        optional, entrance choreography
 //                         (an icons.json with the same keys still loads, but is
 //                          deprecated and will be unsupported in a future version)
@@ -38,7 +39,7 @@ function resolveBackground(v) {
   return isColor ? { color: v } : { image: new URL(v, import.meta.url).href };
 }
 
-async function buildIcon(ctx, name, background, sequence) {
+async function buildIcon(ctx, name, background, sequence, glyph) {
   const base = new URL(`./icons/${name}/`, import.meta.url);
   const mod = await import(new URL('src/index.js', base).href);
 
@@ -86,6 +87,8 @@ async function buildIcon(ctx, name, background, sequence) {
     background,
     pointer,
     setFade,
+    glyph,      // absolute URL of this icon's 2D mark from the manifest's `glyphs:`,
+                // or undefined — a sequence derives one instead (AGENT.md §12)
     sequence,   // { file, doc } parsed from the manifest's `sequence:` file, or undefined
     update(dt) {
       if (controller) { controller.update(dt); icon.update?.(dt, controller); }
@@ -162,10 +165,14 @@ export async function createComponent(ctx) {
   // (even a single icon shows by name, with an unload entry).
   const packBg = resolveBackground(manifest.background);
   const perIcon = manifest.backgrounds || {};
+  // Optional flat marks a sequence can drop into a slot instead of rendering
+  // one itself. Paths are relative to component.js, like every other asset.
+  const glyphs = manifest.glyphs || {};
   const icons = {};
   for (const name of names) {
     const bg = resolveBackground(perIcon[name]) ?? packBg;
-    icons[name] = () => buildIcon(ctx, name, bg, sequence);
+    const glyph = typeof glyphs[name] === 'string' ? new URL(glyphs[name], import.meta.url).href : undefined;
+    icons[name] = () => buildIcon(ctx, name, bg, sequence, glyph);
   }
   return { icons };
 }

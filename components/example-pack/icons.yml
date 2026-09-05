@@ -1,9 +1,14 @@
 # icons.yml — the pack manifest. Comments are welcome; this is YAML.
 # Each name under `icons:` is a folder under icons/ with a src/index.js that
 # has the standard exports (createIconObject, loadIconGeometry, ...).
+#
+# Order matters once the pack has a multi-step sequence flow: put the icon the
+# FIRST step shows first, so the viewer loads exactly the icon the flow starts
+# on and nothing has to be swapped at load.
 icons:
   - twist
   - gem
+  - prism
 
 # Optional pack-wide backdrop: an image path inside the pack, or a CSS colour
 # such as "#05061a". Keep images web-sized (~2732 px tall, JPEG q≈80).
@@ -13,6 +18,13 @@ background: backgrounds/dusk.jpg
 # to `background`.
 # backgrounds:
 #   gem: "#05061a"
+
+# Optional 2D marks, one per icon, for a sequence to drop into a slot when that
+# icon is collected (AGENT.md §12). Paths are relative to component.js, like
+# every other asset. Leave the key out — as this pack does — and the viewer
+# DERIVES each mark instead, by rendering the icon once, offscreen, at preload.
+# glyphs:
+#   twist: glyphs/twist.png
 
 # Optional entrance choreography (AGENT.md §12). Leave the key out and the
 # pack behaves exactly as it always has.

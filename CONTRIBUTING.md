@@ -80,10 +80,25 @@ per-icon exports table appears in both `README.md` and `AGENT.md`, so a change
 to the loader's contract touches those too.
 
 **The sequence vocabulary lives in two places on purpose.** `sequence.js`
-enforces the channel names, element types, verbs and ease names at load;
-`validate-pack.py` repeats them as data (`LAYER_CHANNELS`, `ELEMENT_TYPES`,
-`ACTIONS`, `EASE_NAME`) so a pack can be checked without a browser. A change
-to one should be mirrored in the other, and in the tables in `AGENT.md` §12.
+enforces the channel names, element types, verbs, landing modes and ease names
+at load; `validate-pack.py` repeats them as data (`LAYER_CHANNELS`,
+`ELEMENT_TYPES`, `ACTIONS`, `LAND_MODES`, `EASE_NAME`) so a pack can be checked
+without a browser. A change to one should be mirrored in the other, and in the
+tables in `AGENT.md` §12.
+
+**The two YAML parsers disagree about `on:`.** The page parses with js-yaml,
+which follows YAML 1.2 and reads `on:` as the string `"on"`. PyYAML follows
+YAML 1.1, where a bare `on` is the boolean `True` — so the validator normalises
+boolean mapping keys back to `"on"`/`"off"` on the way in (`_yaml12_keys`).
+Without that, every `on:` block in a `sequence.yml` silently vanished from the
+validator's view and no action was ever checked.
+
+**Three.js work stays in `index.html`; `sequence.js` imports no three.** The
+runtime owns time, DOM and state; the host (`makeSequenceHost()` in
+`index.html`) owns the scene graph and hands back plain numbers — where a 2D
+element is in world space, how much to shrink to fit it, an icon's glyph as a
+data URL. That split is why `sequence.js` can be read without knowing three.js,
+and it is worth preserving.
 
 ## The repo is public
 

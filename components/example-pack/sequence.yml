@@ -1,10 +1,12 @@
-# sequence.yml — entrance choreography for this pack (AGENT.md §12).
+# sequence.yml — the choreography for this pack (AGENT.md §12).
 #
 # Named from icons.yml (`sequence: sequence.yml`). The viewer plays it; the
 # pack loader only reads it. All times are SECONDS. The sequence never owns
 # spin: each icon's own controller keeps assigning rotation every frame, so
 # there is no rotation channel here — only the entrance (fade / scale / rise on
-# the 3D icon, and the 2D copy + call-to-action drawn over the canvas).
+# the 3D icon and the 2D copy over the canvas) and, once a step's `on:` uses
+# `advance`, a multi-step FLOW: tap, the icon flies into a slot, the next one
+# enters behind it.
 #
 # Comments are the point of YAML here: when a timing changes in review, say
 # why next to the number.
@@ -18,15 +20,26 @@ version: 1
 ease:
   swell:   &ease-swell   outCubic     # things that grow into place
   resolve: &ease-resolve outQuart     # things that sharpen into place
+  leave:   &ease-leave   inQuad       # things that get out of the way
 
 # --- capabilities this sequence needs ---------------------------------------------
 # The icon fade needs either a setFade(v) on the icon object or standard
-# materials the viewer can fade for you (both example icons have the latter).
-# If neither is available the fade channel is dropped, everything else plays,
-# and the console says so once.
+# materials the viewer can fade for you (all three example icons have the
+# latter). If neither is available the fade channel is dropped, everything else
+# plays, and the console says so once — per icon.
 requires:
   icon.fade:
     degrade: scale-only
+
+# --- resume: opt-in, per pack -------------------------------------------------------
+# Absent (or `minutes: 0`) means NOTHING is stored in the visitor's browser.
+# With it, the current step and the collected slots are written to localStorage
+# on every state change, and read back on load if the last change was inside
+# the window. Editing this file invalidates a saved state rather than stranding
+# someone on a step that no longer exists.
+resume:
+  minutes: 30
+  id: example-pack        # optional; defaults to the pack's name
 
 # --- what this sequence is allowed to touch ------------------------------------
 # Every name used in a track must be declared here. `top`/`left` are viewport
@@ -35,27 +48,33 @@ requires:
 # fits a landscape desktop still fits a portrait phone).
 stage:
   hud:
-    pips: { type: pips, top: 0.13, size: 0.018 }
+    # Three rings, collected left to right. Each ring is separately addressable
+    # as `slot1`, `slot2`, `slot3` — the element's name plus a 1-based index.
+    slot: { type: slots, count: 3, top: 0.14, size: 0.075, gap: 0.40, color: "#e9e3f4", dim: "#e9e3f433" }
   icon:
-    ref: current                     # applies to whichever icon is showing
+    ref: current                     # a flow always drives the icon itself
   overlay:
     line1: { type: text, top: 0.72, size: 0.05, weight: 700, tracking: 0.10 }
     line2: { type: text, top: 0.79, size: 0.05, weight: 700, tracking: 0.10 }
-    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff" }
+    # `persist: true` — once the call-to-action has arrived it is never hidden
+    # and never re-animated, so the tap target does not move under a finger.
+    cta:   { type: button, top: 0.905, size: 0.055, text: "→", color: "#9cc3ff", persist: true }
 
 # --- state at frame 0 ----------------------------------------------------------
-# Not animation: the pips are present, fully formed, with the first one
-# filled, and never animate in. A state lives here, not as a zero-length track.
-initial:
-  pips: { filled: 1, total: 3 }
+# Not animation. Slots start empty here; `slot: { filled: 1 }` (a count) or
+# `slot: { filled: [twist] }` (icon names) would start the flow part-way in.
+# initial:
+#   slot: { filled: 0 }
 
 steps:
 
-  # A step with no `icon:` is the default for every icon in the pack. The
-  # anchor lets the second step below reuse the exact same choreography with
-  # its own copy — the choreography is the step; the icon and copy are the
+  # ---- step 1 --------------------------------------------------------------------
+  # A flow step names the icon it shows: the sequence drives the viewer, not the
+  # other way round. The entrance is anchored so every step reuses the exact
+  # same choreography — the choreography is the step; the icon and copy are the
   # variables.
-  - id: intro
+  - id: one
+    icon: twist
     copy:
       line1: "FIRST LINE OF COPY"
       line2: "SECOND LINE OF COPY"
@@ -91,7 +110,9 @@ steps:
       - label: copy-settled
 
       # CALL TO ACTION — fades and rises with a glow, 0.8 s after the copy
-      # settles. Retiming the copy carries it along.
+      # settles. Retiming the copy carries it along. Because the
+      # element is `persist: true`, this track plays ONCE, in whichever step
+      # first reaches it; later steps skip it and it simply stays.
       - id: cta-in
         target: cta
         at: copy-settled + 0.8
@@ -101,21 +122,98 @@ steps:
           rise:  [14, 0]         # px, starts below its rest position
           bloom: [0, 1]          # 0–1 intent; the viewer maps it to a glow
 
-    # Tapping the call-to-action replays the entrance. (Phase 1 verbs: replay,
-    # nothing.)
-    on:
-      cta.tap: { do: replay }
+    # `exit:` is what plays when this step is LEFT. Its `to:` track is the
+    # general "send the 3D icon to a 2D element" primitive: a straight line to
+    # the element's centre with a simultaneous shrink to `fit` of its inner
+    # diameter. `land.mode: object` keeps the real 3D object in the ring —
+    # frozen, because the sequence takes it out of the update path first — and
+    # `after: glyph` swaps it for the flat mark a beat later, so an author gets
+    # the 3D motion without paying for a permanently live shader.
+    exit:
+      - &copy-out
+        id: copy-out
+        target: [line1, line2]
+        at: 0
+        timing: { dur: 0.28, ease: *ease-leave }
+        channels:
+          fade: [1, 0]
+          blur: [0, 10]
+      - id: collect
+        target: icon
+        to: slot1
+        at: 0.1
+        timing: { dur: 0.6, ease: *ease-swell }
+        land:
+          mode:  object          # object | glyph
+          face:  front           # stop rotating, rest facing front
+          fit:   0.68            # fraction of the ring's inner diameter
+          after: glyph           # …then become the flat mark
+          delay: 0.40            # …this long after touchdown
 
-    # No exit and no transition: hold the final frame.
+    on:
+      cta.tap: { do: advance }   # verbs: advance, restart, replay, nothing
     end: hold
 
-  # Same choreography, different copy, for one specific icon.
-  - id: intro-gem
+  # ---- step 2 --------------------------------------------------------------------
+  # `overlap` is the one number to retune in review: how many seconds THIS
+  # step's entrance starts BEFORE the previous step's exit ends. 0 is strictly
+  # sequential; 0.35 has the new icon already swelling in as the old one lands.
+  - id: two
     icon: gem
+    overlap: 0.30
     copy:
       line1: "A SECOND ICON"
       line2: "THE SAME CHOREOGRAPHY"
     timeline: *entrance
+    exit:
+      - *copy-out
+      - id: collect
+        target: icon
+        to: slot2
+        at: 0.1
+        timing: { dur: 0.6, ease: *ease-swell }
+        land:
+          mode: object           # no `after:` — the real object stays in the ring
+          face: front
+          fit:  0.68
     on:
-      cta.tap: { do: replay }
+      cta.tap: { do: advance }
+    end: hold
+
+  # ---- step 3 --------------------------------------------------------------------
+  - id: three
+    icon: prism
+    overlap: 0.30
+    copy:
+      line1: "A THIRD ICON"
+      line2: "THE LAST ONE TO COLLECT"
+    timeline: *entrance
+    exit:
+      - *copy-out
+      - id: collect
+        target: icon
+        to: slot3
+        at: 0.1
+        timing: { dur: 0.6, ease: *ease-swell }
+        land:
+          mode: glyph            # the flat mark appears and the object is released
+          fit:  0.68
+    on:
+      cta.tap: { do: advance }
+    end: hold
+
+  # ---- the end state ---------------------------------------------------------------
+  # A flow step with no `icon:` is a state, not an icon: nothing is on the
+  # canvas, there is no copy, and the call-to-action is still exactly where it
+  # has been since step 1. Its zero-length track matters only on a RESUME
+  # straight into this state, when nothing has arrived yet — during a live run
+  # the `persist:` element has already arrived and the track is skipped.
+  - id: done
+    timeline:
+      - id: cta-hold
+        target: cta
+        timing: { dur: 0 }
+        channels: { fade: 1, rise: 0, bloom: 1 }
+    on:
+      cta.tap: { do: restart }   # empties the rings instantly and replays step 1
     end: hold
