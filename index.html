@@ -66,15 +66,22 @@
     width: 1em; height: 1em; border-radius: 50%; box-sizing: border-box;
     border: var(--slot-ring) solid var(--slot-off); background: transparent;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
-    /* `overflow: hidden` with `border-radius` is NOT reliable on iOS Safari:
-       the rounded clip is dropped in some compositing paths and a child's
-       square box paints to its corners. The glyph is 76% of the ring, so its
-       corners reach .76/2*sqrt(2) = .537 of the diameter — past the .5 the
-       circle allows — and they showed as dark notches inside the ring on a
-       phone while desktop clipped correctly. clip-path is honoured on the
-       compositor, so it holds where overflow does not. Both are kept: overflow
-       for layout, clip-path for the guarantee. */
-    clip-path: circle(50% at 50% 50%);
+    /* NO `clip-path` HERE, deliberately, and it is not an oversight — it was
+       tried and it MADE A WORSE BUG. `circle(50% at 50% 50%)` resolves to a
+       radius of exactly half the border box, which is precisely the ring's
+       outer edge, and iOS Safari rasterises that clip a fraction inside the
+       stroke at the four diagonals. The result was four black notches at
+       45/135/225/315 degrees, eating the ring itself.
+       Measured on a real iPhone (iOS 26.6.1), sampling stroke luminance every
+       degree at 0.94R, median stroke 236:
+         clip-path on,  glyph shown   -> 10 of 360 samples black
+         clip-path on,  glyph HIDDEN  ->  8 of 360 black  (so not the glyph)
+         clip-path off, glyph shown   ->  0 of 360        CLEAN
+       `overflow: hidden` with `border-radius` carries the clipping on its own,
+       and the glyph cannot reach the stroke anyway: its captured PNG is
+       transparent at the corners and its opaque content stops at .808 of half
+       width, well inside the ring. Do not "fix" the rings by adding a clip
+       here — that is the bug, not the cure. */
     transition: border-color .25s ease, box-shadow .25s ease;
   }
   #fg .fg-slot.is-next   { border-color: var(--slot-on); box-shadow: 0 0 .5em color-mix(in srgb, var(--slot-on) 55%, transparent); }
@@ -85,18 +92,16 @@
   #fg .fg-slot .fg-glyph {
     width: 76%; height: 76%; object-fit: contain; display: block;
     background: transparent;   /* never let a UA paint a matte behind the PNG */
-    /* CLIP THE GLYPH ITSELF, not only its ring. The ring above already carries
-       `clip-path`, but a PARENT's clip is not reliably applied to this child on
-       iOS Safari: the glyph's square corners reach .537 of the ring diameter
-       (see the note on the ring) and painted over the stroke as dark notches at
-       the four diagonals, on a phone only — desktop clipped correctly, so the
-       parent-only clip looked like a working fix for months. Clipping the
-       element itself needs nothing from the parent and nothing from the
-       compositor's treatment of nested clips. Measured on a real iPhone: the
-       captured PNG's corners are fully transparent (alpha 0) and its opaque
-       content stops well inside the ring, so the notches were the element's
-       own box being painted, never the image's pixels. */
-    clip-path: circle(50% at 50% 50%);
+    /* Round the GLYPH's own corners with a mask, not a clip, and note the
+       radius: this circle is 50% of the glyph box, which is .38 of the ring
+       diameter — far inside the .5 where the stroke lives. That distance is the
+       whole point. A clip on the RING resolves to exactly the stroke's outer
+       edge, which iOS rasterises a hair inside and bites the ring (see above);
+       a mask on the GLYPH never comes near the stroke, so it cannot. It only
+       removes the glyph box's own corners, which reach .537 of the ring
+       diameter and are the one thing in this element that can overhang. */
+    -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 98%, transparent 100%);
+            mask-image: radial-gradient(circle at 50% 50%, #000 98%, transparent 100%);
   }
   /* An author rule beats the UA's [hidden] rule, so say it here too — without
      this an emptied ring shows a broken-image icon instead of nothing. */
