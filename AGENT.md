@@ -1017,6 +1017,23 @@ Verified against the source. Do not attempt these — they are not there to find
   `screen.orientation.lock()` needs fullscreen and does not exist in mobile
   Safari at all, and nothing here is written against an API that is missing on
   the platform that matters most (§12.14).
+- **No hiding the browser's own chrome.** A page cannot remove mobile Safari's
+  URL bar, its bottom toolbar, or the landscape tab strip, and there is no
+  parameter here that tries. Apple treats browser chrome as anti-spoofing
+  surface, so no API exists: `requestFullscreen()` is absent on iPhone Safari
+  (it is `<video>`-only via `webkitEnterFullscreen`), `minimal-ui` was removed
+  in iOS 8, and the `window.scrollTo(0, 1)` trick died with iOS 7. **Assume the
+  chrome is always there** when composing. A viewer reached by a plain link is
+  the normal case, and asking a visitor to "Add to Home Screen" — the one
+  standalone route that does hide it — is not a realistic instruction for a
+  one-tap experience. So compose for the space you are given rather than fight
+  for the space you are not: the meta viewport is `viewport-fit=cover`, overlay
+  chrome is placed with `env(safe-area-inset-*)`, and heights use **`dvh`, never
+  `vh`** — `dvh` tracks the toolbar as it expands and collapses mid-session,
+  `vh` does not and will let it occlude your bottom row. iOS does collapse the
+  bottom bar on a downward *scroll*, but this is a fixed, non-scrolling stage
+  that claims vertical swipe for `advance` (§12.13), so that is not a lever
+  either.
 - **No progress reporting while a pack loads.** The curtain (§7, `loading:`) is
   a ground colour, an optional image and a pulse. There is no spinner library,
   no percentage and no fake progress bar — a pack's total work is not known in
@@ -2039,6 +2056,14 @@ glyph with NO TEXT, and HOLDS the sequence**. On returning to a supported
 orientation the curtain lifts and play resumes at exactly the time and step it
 stopped at.
 
+- **`orientation:` is NOT the `portrait:` placement overrides of §12.15.** Two
+  different features, easily conflated: this key arms the lock; `portrait:`
+  blocks under `stage:` only re-place 2D elements when the stage is taller than
+  it is wide. A sequence can carry a full set of `portrait:` overrides and still
+  have no lock at all — landscape just plays through, re-placed. If rotating the
+  device does nothing, check that this top-level key is actually present.
+- **The browser's own chrome stays visible regardless** — the URL bar and
+  toolbar are not the viewer's to hide, in either orientation (§11).
 - **It is advisory, and that shapes the whole approach.**
   `screen.orientation.lock()` requires fullscreen and **does not exist in
   mobile Safari**, so there is no code path here that turns a device: the
