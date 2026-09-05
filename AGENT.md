@@ -971,6 +971,19 @@ emulation they are different numbers and only one of them is what the app used.
     can sit indefinitely on a page that is not being painted, which is exactly
     a hidden pane, gotcha 1) and counts it as part of the first draw.
 
+20. **`overflow: hidden` with `border-radius` does not reliably clip on iOS
+    Safari.** A child's square box can paint to its corners even though the
+    parent is a circle, and desktop clips it correctly so the bug is invisible
+    until someone opens it on a phone. The collected-icon rings hit this: the
+    glyph is 76% of the ring, so its corners reach `.76/2*sqrt(2) = .537` of the
+    diameter — past the `.5` the circle allows — and they showed as dark notches
+    inside the ring. Fixed by adding `clip-path: circle(50%)`, which is honoured
+    on the compositor where `overflow` is not. **If you make a round container
+    that clips a square child, use `clip-path` and do not rely on `overflow`
+    alone.** The safer geometry is to keep the child under 70.7% so its corners
+    never leave the circle at all, but that changes the mark's size and the
+    capture box (`GLYPH_BOX`) has to move with it.
+
 ---
 
 ## 11. What this viewer does not do

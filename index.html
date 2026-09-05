@@ -66,6 +66,15 @@
     width: 1em; height: 1em; border-radius: 50%; box-sizing: border-box;
     border: var(--slot-ring) solid var(--slot-off); background: transparent;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
+    /* `overflow: hidden` with `border-radius` is NOT reliable on iOS Safari:
+       the rounded clip is dropped in some compositing paths and a child's
+       square box paints to its corners. The glyph is 76% of the ring, so its
+       corners reach .76/2*sqrt(2) = .537 of the diameter — past the .5 the
+       circle allows — and they showed as dark notches inside the ring on a
+       phone while desktop clipped correctly. clip-path is honoured on the
+       compositor, so it holds where overflow does not. Both are kept: overflow
+       for layout, clip-path for the guarantee. */
+    clip-path: circle(50% at 50% 50%);
     transition: border-color .25s ease, box-shadow .25s ease;
   }
   #fg .fg-slot.is-next   { border-color: var(--slot-on); box-shadow: 0 0 .5em color-mix(in srgb, var(--slot-on) 55%, transparent); }
@@ -73,7 +82,10 @@
   /* 76% is not decorative: the glyph is CAPTURED through the same box (see
      GLYPH_BOX in the sequence host) so the PNG and the live 3D object are the
      same size and the same projection at ring size. Change one, change both. */
-  #fg .fg-slot .fg-glyph { width: 76%; height: 76%; object-fit: contain; display: block; }
+  #fg .fg-slot .fg-glyph {
+    width: 76%; height: 76%; object-fit: contain; display: block;
+    background: transparent;   /* never let a UA paint a matte behind the PNG */
+  }
   /* An author rule beats the UA's [hidden] rule, so say it here too — without
      this an emptied ring shows a broken-image icon instead of nothing. */
   #fg .fg-slot .fg-glyph[hidden] { display: none; }
