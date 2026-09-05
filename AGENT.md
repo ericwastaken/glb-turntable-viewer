@@ -767,6 +767,43 @@ a real device does, and is the only way to review a rotation lock (§12.14), a
 Measure against **`viewer.stage`**, never `innerWidth`/`innerHeight` — under
 emulation they are different numbers and only one of them is what the app used.
 
+### And then check it on a real iPhone
+
+`?dev=mobile` gets the layout right. It cannot tell you about texture memory,
+WebKit compositing, thermal behaviour, or whether Safari kills the tab — and
+those are the failures that only show up on the device you are shipping to.
+
+**[`DEBUGGING-ON-IPHONE.md`](DEBUGGING-ON-IPHONE.md) is the full procedure.**
+Two routes, both requiring Web Inspector ON on the phone:
+
+- **`.claude/tools/ios-eval.sh '<expr>'`** evaluates JavaScript on the page you
+  already have open and returns the value as text, via the attached Web
+  Inspector console. No cable. Use it to read live state.
+- **`.claude/tools/ios-safari-drive.sh`** drives Apple's `safaridriver`: its own
+  session, plus navigation and screenshots. Needs a USB cable, iPhone Mirroring
+  quit, and a one-time `safaridriver --enable`.
+
+Four things that will produce a WRONG conclusion if you do not know them:
+
+1. **A synthetic click does not tap this viewer, and says it did.** A WebDriver
+   element click on a sequence's CTA returns `{"value":null}` — success, no
+   error — and the sequence does not advance, because taps go through the
+   viewer's own pointer handling and hit test, not a DOM click handler. **Never
+   report a tap from the click's return value; assert the state changed.** Drive
+   flows with `viewer.sequence.advance()` / `.restart()` / `.seek(t)` instead.
+2. **Safari's user-agent lies about the OS version** — it is frozen, and reports
+   an older major version than the device runs. Read `safari:platformVersion`
+   from the WebDriver session capabilities, or do not state a version at all.
+3. **A stale clipboard reads exactly like a successful result.** The eval bridge
+   returns values through the Mac clipboard, so an expression that throws leaves
+   the previous answer sitting there. `ios-eval.sh` primes a sentinel and treats
+   an unchanged clipboard as failure — do not remove that guard, and do not
+   hand-roll the technique without it.
+4. **`devicePixelRatio` is not what the renderer uses.** The viewer caps at
+   `min(devicePixelRatio, 2)`, so a 3x screen renders at 2x. Size texture
+   budgets against the rendered resolution — but a sequence's derived slot marks
+   are DOM images and *are* displayed at the full device ratio.
+
 ---
 
 ## 9. Troubleshooting by symptom

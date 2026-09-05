@@ -33,7 +33,10 @@ Full contents:
    [packaging](#packaging-a-multi-icon-zip-step-by-step) ·
    [loading](#loading-it-on-the-page) ·
    [sequences](#sequences-choreographing-an-icons-entrance--and-a-collect-flow)
-6. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
+6. [**Testing on a real iPhone**](DEBUGGING-ON-IPHONE.md) — read the DOM and
+   run JS against the phone itself; the two routes, and the traps that produce
+   confidently wrong answers
+7. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
 
 ## Run it locally
 
@@ -113,6 +116,7 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 | Path | What |
 |---|---|
 | `index.html` | The page (markup, styles, and module script). |
+| [`DEBUGGING-ON-IPHONE.md`](DEBUGGING-ON-IPHONE.md) | How to debug the viewer on a real iPhone — the Web Inspector eval bridge and Apple's `safaridriver`, plus the failures that look like successes. Tools live in `.claude/tools/`. |
 | `sequence.js` | Plays a pack's optional `sequence.yml` (entrance choreography and multi-step collect flows); loaded only when a pack has one. |
 | `vendor/` | three.js 0.170.0 (MIT) + GLTFLoader, OrbitControls, RoomEnvironment; fflate (MIT) for zips; js-yaml 5.4.1 (MIT) for pack manifests and sequences; Anime.js 4.5.0 (MIT) for sequence timelines. All self-hosted. |
 | `backgrounds/` | `starfield-default.jpg` — synthetic starfield (generated, 4096×2732), the default backdrop. |
