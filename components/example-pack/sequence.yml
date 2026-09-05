@@ -55,8 +55,17 @@ hit:
 # and still comes back. A step may override the whole block.
 rest:
   spring: true             # default true; false leaves the icon where it was left
-  dur: 0.5                 # seconds
-  ease: outBack            # the small overshoot reads as weight
+  dur: 0.5                 # seconds — how LONG the return takes
+  # …and how it FEELS on the way. Three ways to write it, softest first:
+  #   outBack(0.4)          barely overshoots, reads as a settle
+  #   outBack(0.9)          the default: a nudge past centre  (bare `outBack`
+  #                         is Anime.js's 1.70158 and is deliberately springy)
+  #   spring(60, 14)        a real spring: peaks at 1.00, no visible bounce
+  #   spring(100, 10)       peaks at 1.16
+  #   spring(200, 8)        peaks at 1.40 — the loosest thing here
+  # Stiffness raises the overshoot, damping kills it. `dur` still owns timing:
+  # a spring is used as the CURVE, not as its own clock.
+  ease: outBack(0.9)
 
 # --- what this sequence is allowed to touch ------------------------------------
 # Every name used in a track must be declared here. `top`/`left` are viewport

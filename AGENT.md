@@ -850,7 +850,9 @@ after `seek(0)`. A flow's icons therefore share the first icon's framing.
 version: 1                                # required; this viewer plays version 1
 
 # Named easings — YAML anchors, so a review note changes one line.
-# Any Anime.js name (linear, outCubic, inOutQuart, outBack, …) or
+# Any Anime.js name (linear, outCubic, inOutQuart, outBack, …), a PARAMETRISED
+# one (outBack(0.8), outElastic(1, 0.4)), a real spring
+# (spring(stiffness, damping) or spring(mass, stiffness, damping, velocity)), or
 # cubic-bezier(a, b, c, d).
 ease:
   swell:   &ease-swell   outCubic
@@ -880,7 +882,7 @@ hit:
 rest:
   spring: true                            # default true; false = leave it where it was left
   dur: 0.5                                # seconds (default 0.5)
-  ease: outBack                           # any sequence ease (default outBack)
+  ease: outBack(0.9)                      # any sequence ease (default outBack(0.9))
 
 # Every name a track may target. Positions are viewport fractions of the
 # element's CENTER (like framing.verticalCenter); size is font size as a
@@ -1057,7 +1059,12 @@ look as final.
   channels, so a fade and a scale cannot be desynced by accident.
 - `ease` is any Anime.js v4 name (`linear`, `in/out/inOut` × `Quad Cubic
   Quart Quint Sine Circ Expo Bounce Back Elastic`, …) or
-  `cubic-bezier(a,b,c,d)`. Unknown names are load-time errors.
+  `cubic-bezier(a,b,c,d)`, a parametrised name such as `outBack(0.8)` or
+  `outElastic(1, 0.4)`, or a real spring: `spring(stiffness, damping)` — or
+  `spring(mass, stiffness, damping, velocity)` for the long form. Unknown names,
+  wrong argument counts and non-numeric arguments are all load-time errors.
+  A spring is used as the CURVE only: Anime.js reports a fixed duration for it
+  here, so the track's own `dur` still owns the timing.
 - `duration` is the current **phase's** length, and `end: hold` clamps there.
   A phase is either a step's entrance or a transition (an exit plus the next
   entrance, overlapped) — so `viewer.sequence.duration` changes as a flow
@@ -1526,7 +1533,20 @@ orientation:
 rest:
   spring: true         # default true; false leaves it where it was left
   dur: 0.5             # seconds (default 0.5)
-  ease: outBack        # any sequence ease (default outBack)
+  ease: outBack(0.9)   # any sequence ease (default outBack(0.9))
+
+  # HOW SPRINGY the return feels is this line, and it spans a wide range.
+  # Measured on the example pack, same 160 px drag, peak overshoot past rest:
+  #
+  #   outBack(0.2)      -0.00099 rad   barely a settle
+  #   outBack(0.9)      -0.03668 rad   the default: a nudge past centre
+  #   outBack           -0.12251 rad   Anime.js's bare 1.70158 — springy
+  #   spring(60, 14)                   a real spring, no visible bounce
+  #   spring(100, 10)                  a soft bounce
+  #   spring(200, 8)    -0.46504 rad   loose and rubbery
+  #
+  # Stiffness raises the overshoot, damping kills it. `dur` is still the clock:
+  # shorten it to make any of these snappier without changing their character.
 ```
 
 - **Scope:** the block above is the sequence-wide default; **a step may carry
@@ -1554,7 +1574,9 @@ Taps are unchanged: `on: { <element>.tap: … }` still only binds 2D elements
 ### 12.13 Deliberately not supported
 
 Keyframes beyond `[from, to]`; `shift`/`scale` on 2D elements; a `background`
-target; a physical spring solver (`rest:` is a tween with an `outBack`-style
+target; a stateful spring that survives being re-disturbed mid-return (`rest:`
+  restarts its tween; the curve may be a real spring, but the solver is not
+  carried across gestures) (`rest:` is a tween with an `outBack`-style
 ease, §12.12); responsive variants; *taps* on the icon (the canvas answers
 drags, and routes them by hit test — §12.12); a `goto <step>` verb (steps advance in order, or
 restart); restoring a landed 3D object across a reload (a resumed ring shows

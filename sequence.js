@@ -48,7 +48,7 @@
 // tween is NOT re-written on later seeks, so the state objects belong to anime
 // and are never reset per frame.
 
-import { createTimeline, cubicBezier } from 'animejs';
+import { createTimeline, cubicBezier, eases, spring } from 'animejs';
 
 // --- vocabulary ----------------------------------------------------------------
 // Short on purpose: exactly what an entrance and a collect flow need. Anything
@@ -70,7 +70,9 @@ export const LAND_MODES = ['object', 'glyph'];
 const DEFAULT_FIT = 0.72;        // fraction of the target's inner diameter
 const DEFAULT_XFADE = 0.12;      // seconds of object -> glyph cross-fade
 const DEFAULT_PADDING = 0.25;    // grab zone, as a fraction of the projected radius
-const REST_DEFAULT = { spring: true, dur: 0.5, ease: 'outBack' };
+// `outBack` unparametrised overshoots by 1.70158, which reads as aggressive on
+// a hand-sized icon. The default is deliberately gentler; authors dial it.
+const REST_DEFAULT = { spring: true, dur: 0.5, ease: 'outBack(0.9)' };
 const REST_KEYS = ['spring', 'dur', 'ease'];
 // A drag of the viewport's SHORTER side is one full turn, so the gesture feels
 // the same on a phone and on a desktop.
@@ -79,6 +81,17 @@ const DRAG_PITCH_LIMIT = 1.2;    // radians; past this an icon reads as tumbling
 // Anime.js v4 easing names (the parametrised forms and springs are left out).
 export const EASE_NAME = /^(linear|none|in|out|inOut|outIn|(in|out|inOut|outIn)(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$/;
 const CUBIC_BEZIER = /^cubic-bezier\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)$/;
+// `name(a, b)` — the Back and Elastic families take parameters, and that is the
+// dial for how much a return overshoots. Bare `outBack` is Anime.js's default
+// 1.70158, which reads as very springy; outBack(0.8) is a nudge.
+const EASE_CALL = /^([A-Za-z][\w]*)\(\s*([-+\d.,\s]*)\)$/;
+// A real spring, for tuning feel rather than a curve shape:
+//   spring(stiffness, damping) | spring(mass, stiffness, damping, velocity)
+// Anime's spring reports a fixed .duration here, so it is used as an EASE and
+// the sequence's own `dur` still owns the timing. Stiffness raises the
+// overshoot, damping kills it: spring(100, 10) peaks at 1.16, spring(60, 14)
+// at 1.00 (measured against the vendored build).
+const SPRING_ARGS = ['mass', 'stiffness', 'damping', 'velocity'];
 
 // localStorage keys, namespaced so a pack's state cannot collide with anything
 // else on the origin. NOTHING is stored unless the pack declares `resume:`.
@@ -100,7 +113,42 @@ function resolveEase(v, where) {
   const cb = CUBIC_BEZIER.exec(s);
   if (cb) return cubicBezier(+cb[1], +cb[2], +cb[3], +cb[4]);
   if (EASE_NAME.test(s)) return s;
-  return fail(where, `unknown ease "${s}" — use an Anime.js name (outCubic, inOutQuart, …) or cubic-bezier(a,b,c,d)`);
+
+  const call = EASE_CALL.exec(s);
+  if (call) {
+    const name = call[1];
+    const args = call[2].trim() === '' ? []
+      : call[2].split(',').map((a, i) => {
+          const n = Number(a.trim());
+          if (!Number.isFinite(n)) fail(where, `ease "${s}": argument ${i + 1} is not a number`);
+          return n;
+        });
+    if (name === 'spring') {
+      if (args.length !== 2 && args.length !== 4) {
+        fail(where, `spring(...) takes stiffness, damping — or mass, stiffness, damping, velocity — got ${args.length}`);
+      }
+      // The 2-arg shorthand is the common case; mass and velocity default.
+      const vals = args.length === 2 ? [1, args[0], args[1], 0] : args;
+      const cfg = {};
+      SPRING_ARGS.forEach((k, i) => { cfg[k] = vals[i]; });
+      if (cfg.mass <= 0 || cfg.stiffness <= 0 || cfg.damping < 0) {
+        fail(where, `spring(...): mass and stiffness must be > 0 and damping >= 0`);
+      }
+      const sp = spring(cfg);
+      const fn = typeof sp === 'function' ? sp : sp.ease;
+      if (typeof fn !== 'function') fail(where, `spring(...) did not produce an easing function`);
+      return fn;
+    }
+    const factory = eases[name];
+    if (typeof factory !== 'function') fail(where, `unknown ease "${name}(…)"`);
+    const fn = factory(...args);
+    if (typeof fn !== 'function') {
+      fail(where, `ease "${name}" does not take parameters — write it without brackets`);
+    }
+    return fn;
+  }
+
+  return fail(where, `unknown ease "${s}" — an Anime.js name (outCubic, inOutQuart, …), a parametrised one (outBack(0.8), outElastic(1, 0.4)), spring(stiffness, damping), or cubic-bezier(a,b,c,d)`);
 }
 
 // `0.2` | `after` | `label` | `label + 0.3` | `label - 0.2`   (seconds)

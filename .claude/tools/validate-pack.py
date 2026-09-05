@@ -201,6 +201,32 @@ EASE_NAME = re.compile(
     r"(Quad|Cubic|Quart|Quint|Sine|Circ|Expo|Bounce|Back|Elastic))$"
 )
 CUBIC_BEZIER = re.compile(r"^cubic-bezier\(\s*[-+\d.]+\s*(,\s*[-+\d.]+\s*){3}\)$")
+# name(a, b) — the Back/Elastic families take parameters, and spring(...) is a
+# real spring. The runtime resolves these against Anime.js; here we only check
+# the shape and the argument count, so a typo fails the pack rather than the page.
+EASE_CALL = re.compile(r"^([A-Za-z]\w*)\(\s*([-+\d.,\s]*)\)$")
+PARAM_EASES = {"inBack", "outBack", "inOutBack", "outInBack",
+               "inElastic", "outElastic", "inOutElastic", "outInElastic"}
+
+
+def ease_ok(value):
+    """True if `value` is an ease the runtime will accept."""
+    e = str(value).strip()
+    if EASE_NAME.match(e) or CUBIC_BEZIER.match(e):
+        return True
+    m = EASE_CALL.match(e)
+    if not m:
+        return False
+    name, raw = m.group(1), m.group(2).strip()
+    args = [a.strip() for a in raw.split(",")] if raw else []
+    for a in args:
+        try:
+            float(a)
+        except ValueError:
+            return False
+    if name == "spring":
+        return len(args) in (2, 4)
+    return name in PARAM_EASES and len(args) <= 2
 AT_EXPR = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*(?:([+-])\s*([\d.]+))?\s*$")
 TOP_KEYS = ("version", "ease", "requires", "resume", "hit", "rest", "stage", "initial", "steps")
 
@@ -367,8 +393,9 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
             err(f"{where}.dur must be a number of seconds >= 0")
         if "ease" in decl:
             e = str(decl["ease"])
-            if not (EASE_NAME.match(e) or CUBIC_BEZIER.match(e)):
-                err(f'{where}.ease: unknown ease "{e}"')
+            if not ease_ok(e):
+                err(f'{where}.ease: unknown ease "{e}" (name, name(a, b), '
+                    f"spring(stiffness, damping) or cubic-bezier(a,b,c,d))")
         for k in decl:
             if k not in REST_KEYS:
                 warn(f'{where}: unknown key "{k}" (ignored)')
@@ -444,8 +471,10 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
             if "dur" in timing and not (_is_num(timing["dur"]) and timing["dur"] >= 0):
                 err(f"{where}.timing.dur must be a number of seconds >= 0")
             ease = timing.get("ease")
-            if ease is not None and not (EASE_NAME.match(str(ease)) or CUBIC_BEZIER.match(str(ease))):
-                err(f'{where}.timing.ease "{ease}" is not an Anime.js ease name or cubic-bezier(a,b,c,d)')
+            if ease is not None and not ease_ok(ease):
+                err(f'{where}.timing.ease "{ease}" is not an Anime.js ease name, '
+                    f"a parametrised one such as outBack(0.8), spring(stiffness, damping), "
+                    f"or cubic-bezier(a,b,c,d)")
 
             # -- a MOVE track: send the 3D icon to a 2D element
             if "to" in entry:

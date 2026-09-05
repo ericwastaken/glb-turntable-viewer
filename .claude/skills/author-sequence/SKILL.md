@@ -90,7 +90,7 @@ track):
 | Channels match the layer | icon: `fade scale rise` · 2D: `fade rise blur wipe bloom` |
 | Values are `[from, to]` or a bare `to` | Numbers only. A bare `to` starts from the default / `initial:` value |
 | `at:` is a number, `after`, or `label [+/- s]` | Labels are declared **above** the track that uses them, and scoped to their own list |
-| `timing.dur` is seconds ≥ 0; `ease` is an Anime.js name or `cubic-bezier(a,b,c,d)` | `outCubic`, `inOutQuart`, `outBack`, … |
+| `timing.dur` is seconds ≥ 0; `ease` is an Anime.js name, a parametrised one, a spring, or `cubic-bezier(a,b,c,d)` | `outCubic`, `outBack(0.8)`, `spring(60, 14)`, … |
 | Element `type` fits the layer | hud: `slots` (`pips` is deprecated) · overlay: `text`, `button` |
 | `on:` keys are `<element>.tap`; `do:` is `replay`, `nothing`, `advance`, `restart` | Only the bound element receives pointer events |
 | `steps[].icon` / `stage.icon.ref` name a listed icon | or `ref: current` |
@@ -168,7 +168,7 @@ Checklist for a flow:
 - **`hit: { padding: 0.25 }`** widens every icon's grab zone by that fraction of
   its projected radius. Raise it when the collected objects are small enough to
   be fiddly with a thumb; a press that hits nothing rotates nothing either way.
-- **`rest: { spring: true, dur: 0.5, ease: outBack }`** is what happens when a
+- **`rest: { spring: true, dur: 0.5, ease: outBack(0.9) }`** is what happens when a
   dragged icon is let go. It is sequence-wide, and any step may carry its own
   `rest:` to override it. The RUNTIME owns it, so it works for an icon that
   exports no `IconController` at all; an icon that ships its own pointer
