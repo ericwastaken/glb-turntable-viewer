@@ -336,6 +336,19 @@ Two related traps in the same family:
   ignores saved state; `localStorage.clear()` removes it. Clear it BEFORE the
   page loads, not after — the read happens at boot.
 
+## 5c. Two things that will surprise you before you measure anything
+
+- **The viewer's controls are OFF whenever `?component=` is present.** No picker,
+  no transport, no status line — loading a pack means showing it, not operating
+  the tool. Add **`?ui=1`** when a check needs them; `?ui=0` forces them off
+  everywhere. It also means the status line is not always there as a fallback,
+  which is why the curtain carries its own message.
+- **An icon returns to its authored pose at every step entrance** (`start: reset`,
+  the default). Assert rotation ONE FRAME after a restart, not immediately —
+  immediately is always 0, and a carry-over only appears on the next frame, when
+  the controller writes its accumulated yaw. `start: continue` is the opt-out and
+  reproduces the old behaviour, which is how you prove the option does anything.
+
 ## 6. Always read the status line, the curtain, and the console
 
 Almost nothing in this app throws to the user. Bad component, invalid sidecar,

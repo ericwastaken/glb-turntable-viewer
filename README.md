@@ -315,6 +315,10 @@ as they would on a device; the wheel is mapped onto the swipe gesture so a
 trackpad can drive it. The stage is clamped to your window rather than scaled,
 so make the window tall enough (1280x940 comfortably holds 375x812).
 
+A sequence step returns its icon to the authored pose each time it appears
+(`start: reset`), so a restart looks the same as a first run. `start: continue`
+leaves it wherever it was.
+
 The viewer's controls are **hidden automatically when you load a pack or a
 component** — `?component=…` shows the thing, not the tool. Add **`?ui=1`** to
 bring them back for that case.
