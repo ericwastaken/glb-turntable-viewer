@@ -110,11 +110,13 @@
     width: 14vmin; height: 14vmin; max-width: 96px; max-height: 96px;
     border-radius: 50%;
     background: center / contain no-repeat;
-    box-shadow: inset 0 0 0 .9vmin #cfd6ea26;
+    /* Was #cfd6ea26 — 15% alpha, and the pulse floor of .35 opacity took it to
+       roughly 5% on a near-black ground, i.e. invisible. */
+    box-shadow: inset 0 0 0 .9vmin #cfd6eacc;
     animation: curtain-pulse 1.7s ease-in-out infinite;
   }
   @keyframes curtain-pulse {
-    0%, 100% { opacity: .35; transform: scale(.94); }
+    0%, 100% { opacity: .55; transform: scale(.94); }
     50%      { opacity: .95; transform: scale(1); }
   }
   #curtain[data-anim="none"] #curtainMark { animation: none; opacity: .8; }
@@ -283,6 +285,16 @@
    background layer, the canvas and the sequence overlay. The elements stay in
    the DOM and keep their values, so nothing that reads #speed, #modelSelect or
    the sequence transport has to care. Drag, zoom and taps still work. */
+/* --- the viewer's own controls are hidden until asked for -----------------------
+   They used to be visible in CSS and hidden by JS, so every load painted them
+   for a frame or two before `bare` arrived — a flash that reads as an error,
+   and one the curtain could not mask because #hud sits outside its containing
+   block. Inverted: nothing shows until the page adds `chrome`. A late reveal is
+   invisible; a late hide is what you notice. */
+#hud, #status { display: none; }        /* #drop and #editor are already none */
+body.chrome #hud { display: flex; }
+body.chrome #status { display: block; }
+
 body.bare #hud,
 body.bare #status,
 body.bare #drop,
@@ -431,7 +443,14 @@ const params = new URLSearchParams(location.search);
 // ?ui=0 (also: none/off/false/hide) strips the viewer's own controls, leaving
 // just the pack's own picture. Anything else, or absent, keeps the full UI.
 const UI_OFF = /^(0|none|off|false|hide)$/i;
-if (UI_OFF.test((params.get('ui') || '').trim())) document.body.classList.add('bare');
+const uiParam = (params.get('ui') || '').trim();
+if (UI_OFF.test(uiParam)) document.body.classList.add('bare');
+// Show the controls only when this is the viewer being used as a tool. Loading a
+// pack or a component is someone SHOWING something, so it stays clean unless
+// ?ui=1 asks otherwise. Set before first paint, so nothing is ever un-shown.
+const wantsChrome = UI_OFF.test(uiParam) ? false
+  : (uiParam !== '' ? true : !params.get('component'));
+if (wantsChrome) document.body.classList.add('chrome');
 
 // ?dev=… — author mode. It cannot disable caching wholesale: index.html and the
 // statically imported vendor modules are already fetched before any of this

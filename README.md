@@ -315,6 +315,10 @@ as they would on a device; the wheel is mapped onto the swipe gesture so a
 trackpad can drive it. The stage is clamped to your window rather than scaled,
 so make the window tall enough (1280x940 comfortably holds 375x812).
 
+The viewer's controls are **hidden automatically when you load a pack or a
+component** — `?component=…` shows the thing, not the tool. Add **`?ui=1`** to
+bring them back for that case.
+
 Add **`?ui=0`** to hide every viewer control — picker, buttons, sequence
 transport, status line, links — so the page shows only what the pack draws.
 Handy for showing a pack as the page it is meant to be, and for screenshots.
