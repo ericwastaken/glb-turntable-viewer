@@ -164,6 +164,10 @@ Checklist for a flow:
     MOVES, so the tap target is stable even though it fades. Assert opacity
     reaches 0 during the transition and 1 again after the next step settles,
     with the rect unchanged throughout.
+- **Quote label expressions.** `at:` takes a number, `after`, or a
+  `"label ± seconds"` string. Write the string form quoted — YAML turns a bare
+  label named `on`/`off`/`yes`/`no` into a boolean, and an editor will otherwise
+  infer a number-only schema for `at:` and flag the string as a type error.
 - **`overlap` is the one number to retune in review.** It lives on the
   *incoming* step and says how many seconds its entrance starts BEFORE the
   outgoing exit ends. `0` is strictly sequential.

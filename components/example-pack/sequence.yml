@@ -136,16 +136,19 @@ steps:
           fade: [0, 1]
 
       # A named time (= when copy-resolve ends, 2.0 s) so the call-to-action is
-      # described relative to the copy instead of as a bare number.
+      # described relative to the copy instead of as a bare number. QUOTE the
+      # expression that uses it: `at:` takes a number OR a "label ± seconds"
+      # string, and YAML coerces bare scalars — a label called `on`, `no` or
+      # `yes` would arrive as a boolean and fail to parse.
       - label: copy-settled
 
       # CALL TO ACTION — fades and rises with a glow, 0.8 s after the copy
-      # settles. Retiming the copy carries it along. Because the
-      # element is `persist: true`, this track plays ONCE, in whichever step
-      # first reaches it; later steps skip it and it simply stays.
+      # settles. Retiming the copy carries it along. The element
+      # is `persist: false`, so this track plays in EVERY step: the button
+      # leaves in `exit:` on the tap and arrives again right here.
       - id: cta-in
         target: cta
-        at: copy-settled + 0.8
+        at: "copy-settled + 0.8"   # quoted: a label expression is a STRING
         timing: { dur: 0.2, ease: *ease-swell }
         channels:
           fade:  [0, 1]

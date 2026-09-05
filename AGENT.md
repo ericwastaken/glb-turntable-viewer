@@ -942,7 +942,7 @@ steps:
       - label: copy-settled               # = end of the previous track (2.0 s)
       - id: cta-in
         target: cta
-        at: copy-settled + 0.8            # 2.8 s, and it follows the copy if the copy moves
+        at: "copy-settled + 0.8"          # 2.8 s, and it follows the copy if the copy moves
         timing: { dur: 0.2, ease: *ease-swell }
         channels: { fade: [0, 1], rise: [14, 0], bloom: [0, 1] }
 
@@ -1060,7 +1060,13 @@ look as final.
   review notes arrive in absolute seconds ("pull the arrow to 2.6").
 - `at: after` (or no `at`) starts when the previous track in the list ends.
 - `- label: name` declares a time = the end of the previous track (or add
-  `at:` to place it); `at: name + 0.3` / `at: name - 0.2` reference it.
+  `at:` to place it); `at: "name + 0.3"` / `at: "name - 0.2"` reference it.
+  **Quote a label expression.** `at:` is a union — a number, the word `after`,
+  or a `"label ± seconds"` STRING — and YAML coerces bare scalars, so a label
+  named `on`, `off`, `yes` or `no` arrives as a boolean and never resolves.
+  `validate-pack.py` names that specific cause rather than reporting an unknown
+  label. Quoting also stops an editor inferring a number-only schema for `at:`
+  from the surrounding tracks and warning about the string.
   Labels must be declared **above** the track that uses them, and are scoped
   to the list they appear in (a `timeline:` and an `exit:` do not share them).
 - `stagger: s` with a list `target:` starts each successive target `s` later.

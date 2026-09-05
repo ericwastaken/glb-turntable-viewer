@@ -439,6 +439,13 @@ def validate_sequence(doc, seq_file, icon_names, errors, warnings):
             def check_at(expr, where=where):
                 if expr is None or expr == "after" or _is_num(expr):
                     return
+                # A label expression is a STRING. YAML coerces bare scalars, so
+                # a label named on/off/yes/no arrives here as a bool and the
+                # generic "unknown label" would name `True`, not what was typed.
+                if isinstance(expr, bool):
+                    err(f"{where}.at: YAML read this as the boolean {expr} — a label "
+                        f'expression must be quoted, e.g. at: "my-label + 0.5"')
+                    return
                 m = AT_EXPR.match(str(expr))
                 if not m:
                     err(f"{where}.at: cannot parse {expr!r}")
