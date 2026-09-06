@@ -767,6 +767,25 @@ a real device does, and is the only way to review a rotation lock (§12.14), a
 Measure against **`viewer.stage`**, never `innerWidth`/`innerHeight` — under
 emulation they are different numbers and only one of them is what the app used.
 
+### And check what it costs a phone
+
+A pack that renders fine on your desk can still be too heavy to survive mobile
+Safari, and the desktop cannot tell you — it has gigabytes of VRAM. Textures cost
+their **decoded** size (`w * h * 4`, plus a third again if mipmapped), so file
+size and compression format are the wrong things to look at.
+
+**[`OPTIMIZING-A-PACK.md`](OPTIMIZING-A-PACK.md) is the full guide.** The three
+things that catch people:
+
+- **Byte-identical textures in different icons are still uploaded once each.**
+  Icons are separate ES modules loading by their own paths, and three's `Cache`
+  reuses the decoded image, not the `THREE.Texture`. Sharing needs one resolved
+  URL plus a cross-module registry. Prove it by uuid, not by assumption.
+- **Re-encoding to WebP/AVIF saves nothing here.** Dimensions are the only lever
+  on memory.
+- **The renderer caps at `min(devicePixelRatio, 2)`** — size textures against
+  the rendered resolution, not the screen's.
+
 ### And then check it on a real iPhone
 
 `?dev=mobile` gets the layout right. It cannot tell you about texture memory,
