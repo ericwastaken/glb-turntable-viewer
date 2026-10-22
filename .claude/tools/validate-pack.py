@@ -903,6 +903,19 @@ def main(argv):
     if errors:
         print(f"\n{target}: {len(errors)} error(s), {len(warnings)} warning(s), {total} file(s).")
         return 1
+    # A pack whose sequence could not be read has NOT been validated, and saying
+    # "OK" with exit 0 is the one place this tool could tell you something
+    # untrue. Anyone without PyYAML gets the full structural check skipped in
+    # silence otherwise, because the warning scrolls past and $? says success.
+    skipped = [w for w in warnings if "was NOT validated" in w]
+    if skipped:
+        print(
+            f"\n{target}: INCOMPLETE - {len(listed)} icon(s) "
+            f"[{', '.join(sorted(listed))}], {total} file(s), "
+            f"{len(warnings)} warning(s). The sequence file was NOT checked; "
+            f"install PyYAML (pip install pyyaml) and run again."
+        )
+        return 3
     print(
         f"\n{target}: OK - {len(listed)} icon(s) [{', '.join(sorted(listed))}], "
         f"{total} file(s), {len(warnings)} warning(s)."

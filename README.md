@@ -33,12 +33,15 @@ Full contents:
    [packaging](#packaging-a-multi-icon-zip-step-by-step) ·
    [loading](#loading-it-on-the-page) ·
    [sequences](#sequences-choreographing-an-icons-entrance--and-a-collect-flow)
-6. [**Testing on a real iPhone**](DEBUGGING-ON-IPHONE.md) — read the DOM and
+6. [**Sequences**](#sequences-choreographing-an-icons-entrance--and-a-collect-flow)
+   — YAML choreography: an icon's entrance, and multi-step collect flows ·
+   [editing one, start to finish](#editing-a-sequence-start-to-finish)
+7. [**Testing on a real iPhone**](DEBUGGING-ON-IPHONE.md) — read the DOM and
    run JS against the phone itself; the two routes, and the traps that produce
    confidently wrong answers
-7. [**Optimizing a pack for a phone**](OPTIMIZING-A-PACK.md) — decoded size
+8. [**Optimizing a pack for a phone**](OPTIMIZING-A-PACK.md) — decoded size
    is not file size; what to change, and what to leave alone
-8. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
+9. [Known limits](#known-limits-deliberate-its-a-proof-of-concept)
 
 ## Run it locally
 
@@ -98,11 +101,13 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
   sequence, the instant its first step can draw, backdrop and all. The rest of
   the pack loads *after* that, not beside it, so the bytes the first picture
   needs do not share the link with the icons for steps nobody has reached yet.
-  It says what it is doing: a **count** of the resources it is waiting for
-  ("Loading 3 of 6 — …"), never a percentage it cannot compute. Past
-  `slowAfter` (15 s) it admits the link is slow and names what it is waiting
-  on; past `failAfter` (45 s) it gives up on that resource, names it, and
-  offers **Retry**. A pack can restyle it and retune both thresholds
+  It says what it is doing from the first frame — "Loading…", or whatever the
+  pack puts in `loading: { message: … }`. Past `slowAfter` (15 s) it admits the
+  link is slow and reports a **count** of what it is still waiting for ("Still
+  loading 3 of 6."), never a percentage it cannot compute, and under `?dev=1`
+  it also names the resource; past `failAfter` (45 s) it gives up on that
+  resource, names it, and offers **Retry**. A pack can restyle it and retune
+  both thresholds
   (`loading:` in `icons.yml`: a ground colour, an optional image,
   `animation: pulse | none`, `slowAfter`, `failAfter`); the viewer's own
   default is a near-black ground and a soft pulsing disc. Everything on it is
@@ -118,6 +123,7 @@ Then open http://localhost:8000. For static hosting, upload this folder as-is.
 | Path | What |
 |---|---|
 | `index.html` | The page (markup, styles, and module script). |
+| [`AGENT.md`](AGENT.md) | The full reference: every URL parameter, every sidecar and pack key, every `sequence.yml` key with its default, the gotchas, and what this viewer deliberately does not do. Start at §12 for sequences. |
 | [`OPTIMIZING-A-PACK.md`](OPTIMIZING-A-PACK.md) | Making a pack survive a phone: decoded vs file size, sharing textures across icon modules, sizing to what is actually sampled, and what is not worth touching. |
 | [`DEBUGGING-ON-IPHONE.md`](DEBUGGING-ON-IPHONE.md) | How to debug the viewer on a real iPhone — the Web Inspector eval bridge and Apple's `safaridriver`, plus the failures that look like successes. Tools live in `.claude/tools/`. |
 | `sequence.js` | Plays a pack's optional `sequence.yml` (entrance choreography and multi-step collect flows); loaded only when a pack has one. |
@@ -225,7 +231,7 @@ imports and asset paths work untouched; nothing is uploaded anywhere.
 
 Download
 [`components/example-pack.zip`](https://ericwastaken.github.io/glb-turntable-viewer/components/example-pack.zip)
-(11 KB — three procedural icons, the pack's own background, and a three-step
+(17 KB — three procedural icons, the pack's own background, and a three-step
 sequence; no per-icon asset files) and drag it onto
 [the viewer](https://ericwastaken.github.io/glb-turntable-viewer/). The
 dropdown switches to the pack's icons ("twist", "gem" and "prism") plus an
@@ -481,6 +487,53 @@ only load packs from people you trust.
 Works on any static host (GitHub Pages included) and localhost. Requires a
 normal browser window — some private windows block service workers, and the
 viewer will say so rather than fail silently.
+
+#### Editing a sequence, start to finish
+
+Serve the folder and open the example pack **with the author's flags on**:
+
+```bash
+python3 -m http.server 8000
+```
+
+```
+http://localhost:8000/index.html?component=./components/example-pack/component.js&dev=1&ui=1
+```
+
+**`ui=1` is not optional while you are authoring.** Without it the page is in
+bare mode, and a `sequence.yml` that fails to parse leaves you looking at an
+empty window with nothing on the screen or in the status line to say why. With
+it you get the parse error, with line, column and a caret. `dev=1` re-fetches
+the sequence on every reload so you are never debugging a cached copy.
+
+Now open [`components/example-pack/sequence.yml`](components/example-pack/sequence.yml)
+— it is the reference as much as the example, commented line by line with the
+reasoning behind each number — change something (`ease:`, a `dur:`, a `top:`),
+and reload. That is the whole loop.
+
+Two things that will cost you time if nobody says them:
+
+- **An unknown key is ignored in silence.** `orientaton:` or `end: holdd` does
+  not fail — it does nothing, and the page runs exactly as before. Before you
+  ship a pack, run the validator, which catches all of them:
+
+  ```bash
+  pip install pyyaml          # without it the sequence check is SKIPPED
+  python3 .claude/tools/validate-pack.py components/example-pack
+  ```
+
+  It prints `INCOMPLETE` and exits non-zero if it had to skip that check, so a
+  bare `OK` means the sequence really was read.
+
+- **You can drive the sequence from the console.** `window.viewer` is the whole
+  app: `viewer.sequence.seek(1.2)` scrubs to a moment, `.advance()` and
+  `.restart()` step a collect flow, and `viewer.stage` reports the box
+  everything is composed against. Scrubbing beats reloading when you are tuning
+  a timing.
+
+The full key-by-key reference is [`AGENT.md`](AGENT.md) §12 — every key, its
+default, and what it does.
+
 
 ## Known limits (deliberate; it's a proof of concept)
 

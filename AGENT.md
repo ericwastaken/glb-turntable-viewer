@@ -419,10 +419,12 @@ loading:                                  # optional, the loading curtain
   manifest fetch itself is judged by the viewer's defaults, because the file
   that declares the thresholds is the file being waited for.
 
-  **There is a progress line, and it is a COUNT, never a percentage** —
-  "Loading 3 of 6 — icons/gem/src/index.js". The viewer knows how many
-  resources the first draw needs; it does not know how many bytes each one is,
-  and will not invent a number it cannot compute.
+  **Progress is a COUNT, never a percentage — and it appears only once the load
+  is SLOW.** Before `slowAfter` the curtain says "Loading…" (or the pack's own
+  `loading.message`); after it, "Still loading 3 of 6." The viewer knows how
+  many resources the first draw needs; it does not know how many bytes each one
+  is, and will not invent a number it cannot compute. Resource names appear
+  only under `?dev=1` — a visitor is owed plain language, not a module path.
 
   **What the first draw waits for**: the manifest, the sequence file, the
   **first step's icon**, and the **pack background**. Nothing else. The other
@@ -1040,10 +1042,15 @@ Four things that will produce a WRONG conclusion if you do not know them:
       taking black bites out of the ring itself at the four diagonals. Measured
       on a real iPhone: clip on, 10 of 360 stroke samples black; clip removed, 0.
       **Never clip a bordered element at 50% of its own box.**
-    - **A `mask-image` on the GLYPH was unreliable.** It held for two rings and
-      failed on the third after `restart()`. Anything that promotes the element
-      to its own compositing layer puts you at the mercy of how iOS initialises
-      that layer.
+    - **A `mask-image` on the GLYPH appeared unreliable — it was mis-specified.**
+      It seemed to hold for two rings and fail on a third, which looked like iOS
+      compositing being capricious. It was not. `radial-gradient(circle at 50%
+      50%, …)` defaults to **farthest-corner**, so a `98%` stop lands at 98% of
+      the half-DIAGONAL — past every corner of a square box — and the mask clips
+      nothing at all. Measured on a 48px box: half-side 24, half-diagonal 33.94,
+      so it was masking at 33.26. `circle closest-side` is what makes it the
+      inscribed circle. Worth remembering twice over: the bug was ours, and
+      "flaky platform" was the wrong conclusion that nearly stuck.
 
     **The fix is to remove the overhang, not to hide it.** A square box's
     corners sit at `half-width * sqrt(2)`, so keep the child small enough that
@@ -1083,7 +1090,7 @@ Verified against the source. Do not attempt these — they are not there to find
   coexist, and a pack cannot reference another pack's files.
 - **Sequences are choreography, not a general animation system.** No `spin` /
   rotation channel (ever — §12), no keyframes beyond `[from, to]`, no camera
-  moves, no springs, no `goto` verb. Step-to-step transitions exist, but only
+  moves, no `goto` verb. Step-to-step transitions exist, but only
   in one direction and only through `advance` / `restart` (§12.7). See §12 for
   the exact vocabulary. `input:`, `orientation:` and `portrait:` (§12.13–§12.15)
   are DECLARATIONS about input and layout, not new animation.
@@ -1252,8 +1259,8 @@ hit:
 # override the whole block with a `rest:` of its own.
 rest:
   spring: true                            # default true; false = leave it where it was left
-  dur: 0.5                                # seconds (default 0.5)
-  ease: outBack(0.9)                      # any sequence ease (default outBack(0.9))
+  dur: 0.8                                # seconds (default 0.8)
+  ease: outBack(0.25)                     # any sequence ease (default outBack(0.25))
 
 # Every name a track may target. Positions are viewport fractions of the
 # element's CENTER (like framing.verticalCenter); size is font size as a
@@ -2039,14 +2046,14 @@ orientation:
 ```yaml
 rest:
   spring: true         # default true; false leaves it where it was left
-  dur: 0.5             # seconds (default 0.5)
-  ease: outBack(0.9)   # any sequence ease (default outBack(0.9))
+  dur: 0.8             # seconds (default 0.8)
+  ease: outBack(0.25)  # any sequence ease (default outBack(0.25))
 
   # HOW SPRINGY the return feels is this line, and it spans a wide range.
   # Measured on the example pack, same 160 px drag, peak overshoot past rest:
   #
   #   outBack(0.2)      -0.00099 rad   barely a settle
-  #   outBack(0.9)      -0.03668 rad   the default: a nudge past centre
+  #   outBack(0.9)      -0.03668 rad   a pronounced nudge past centre
   #   outBack           -0.12251 rad   Anime.js's bare 1.70158 — springy
   #   spring(60, 14)                   a real spring, no visible bounce
   #   spring(100, 10)                  a soft bounce
@@ -2325,7 +2332,7 @@ CONTRIBUTING.md                background notes for a human contributor (not rul
   skills/…                     repeatable authoring workflows
 ```
 
-`index.html` is ~1,300 lines and, with `sequence.js`, is where all application
+`index.html` is ~2,500 lines and, with `sequence.js`, is where all application
 logic lives. Its sections are marked with `// --- name ---` banner comments;
 navigate by those. In rough order: URL parameters → stage → renderer/scene/camera
 → background layer → curtain → load monitor → retry tokens → deadlines → the

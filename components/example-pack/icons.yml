@@ -37,9 +37,10 @@ sequence: sequence.yml
 #   ground     a CSS colour for the layer itself
 #   image      an image inside the pack, centred (optional)
 #   animation  pulse (default) | none
-# There is no spinner and no percentage: the curtain reports a COUNT of the
-# resources it is waiting for ("Loading 3 of 6 — …"), because that is a number
-# the viewer actually has. Bytes-remaining is not.
+# There is no spinner and no percentage. Up to `slowAfter` the curtain just
+# says "Loading…" (or the message below); past it, a COUNT of what is still
+# outstanding ("Still loading 3 of 6."), because that is a number the viewer
+# actually has. Bytes-remaining is not.
 #
 # …and two for how PATIENT it is, in seconds:
 #   slowAfter  say so, and name what it is waiting on          (default 15)

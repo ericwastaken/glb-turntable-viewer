@@ -36,8 +36,9 @@ cp components/pack.component.js my-pack/component.js
 The loader is the same file in every pack — all pack-specific behaviour lives
 in `icons.yml` and the per-icon modules. If you find yourself wanting to edit
 it, the change belongs in your icon module: `validate-pack.py` compares your
-copy against the repo's and reports a drifted copy as an error, so an edited
-copy will not validate (`AGENT.md` §14).
+copy against the repo's and WARNS about a drifted copy — it is a warning, not
+an error, and the exit code stays 0, so read the output rather than trusting
+the status (`AGENT.md` §14).
 
 ## Step 2 — write `icons.yml`
 
@@ -85,9 +86,9 @@ console warning and will be unsupported in a future version. Rename it to
     Past `slowAfter` the curtain names what it is waiting on; past `failAfter`
     it names it as failed and offers Retry. `slowAfter` must be less than
     `failAfter`; `validate-pack.py` checks it.
-  - Deliberately no spinner and no percentage. It reports a **count** —
-    "Loading 3 of 6 — icons/gem/src/index.js" — because that is a number the
-    viewer has. Only your first step's icon and your backdrop are in that
+  - Deliberately no spinner and no percentage. Once the load is slow it reports
+    a **count** — "Still loading 3 of 6." — because that is a number the viewer
+    has; before that it just says "Loading…".
     count; the rest of the pack is fetched after the curtain lifts.
   - A pack that leaves the key out gets the viewer's own quiet default
     (`AGENT.md` §7).

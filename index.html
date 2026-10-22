@@ -86,22 +86,29 @@
   }
   #fg .fg-slot.is-next   { border-color: var(--slot-on); box-shadow: 0 0 .5em color-mix(in srgb, var(--slot-on) 55%, transparent); }
   #fg .fg-slot.is-filled { border-color: var(--slot-on); }
-  /* 76% is not decorative: the glyph is CAPTURED through the same box (see
+  /* 60% is not decorative: the glyph is CAPTURED through the same box (see
      GLYPH_BOX in the sequence host) so the PNG and the live 3D object are the
-     same size and the same projection at ring size. Change one, change both. */
+     same size and the same projection at ring size. Change one, change both.
+     The number itself is a geometry constraint — see the ring above. */
   #fg .fg-slot .fg-glyph {
     width: 60%; height: 60%; object-fit: contain; display: block;
     background: transparent;   /* never let a UA paint a matte behind the PNG */
-    /* Round the GLYPH's own corners with a mask, not a clip, and note the
-       radius: this circle is 50% of the glyph box, which is .38 of the ring
-       diameter — far inside the .5 where the stroke lives. That distance is the
-       whole point. A clip on the RING resolves to exactly the stroke's outer
+    /* Round the GLYPH's own corners with a mask, not a clip.
+       `closest-side` IS LOAD-BEARING. A bare `circle` defaults to
+       FARTHEST-CORNER, so a 98% stop lands at 98% of the half-DIAGONAL — past
+       every corner of a square box — and the mask silently does nothing.
+       Measured on a 48px box: half-side 24, half-diagonal 33.94, so the
+       unqualified form masked at 33.26 and clipped no corner at all. With
+       `closest-side` the circle is the inscribed one.
+       The radius that gives is 50% of the glyph box, which is .30 of the ring
+       diameter — far inside the .5 where the stroke lives, and that distance
+       is the point. A clip on the RING resolves to exactly the stroke's outer
        edge, which iOS rasterises a hair inside and bites the ring (see above);
-       a mask on the GLYPH never comes near the stroke, so it cannot. It only
-       removes the glyph box's own corners, which reach .537 of the ring
-       diameter and are the one thing in this element that can overhang. */
-    -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 98%, transparent 100%);
-            mask-image: radial-gradient(circle at 50% 50%, #000 98%, transparent 100%);
+       a mask on the GLYPH never comes near it.
+       Belt-and-braces only: the box is sized so its corners cannot reach the
+       stroke in the first place. */
+    -webkit-mask-image: radial-gradient(circle closest-side at 50% 50%, #000 98%, transparent 100%);
+            mask-image: radial-gradient(circle closest-side at 50% 50%, #000 98%, transparent 100%);
   }
   /* An author rule beats the UA's [hidden] rule, so say it here too — without
      this an emptied ring shows a broken-image icon instead of nothing. */
@@ -677,18 +684,18 @@ const curtain = {
   get reason() { return curtainEl.hidden ? null : curtainEl.dataset.reason; },
   get state() { return curtainEl.dataset.state || null; },
   get message() { return curtainSay.hidden ? null : curtainMsg.textContent; },
-  // A pack's `loading:` block from icons.yml (AGENT.md §7). Four knobs — a
-  // ground colour, an image, whether it moves, and (through loadMon) how long
-  // before a slow load is called slow. Still no percentage: the count of
-  // resources is honest, a percentage of bytes we never asked for is not.
-  // What the curtain SAYS while loading. A visitor is owed plain language, not
-  // the name of a module — resource names belong in the slow and failed states
-  // (and in ?dev=), where they are actionable. A pack can say something of its
-  // own with `loading: { message: … }`.
-  message: 'Loading…',
+  // The DEFAULT text the curtain shows while loading, which a pack may replace
+  // with `loading: { message: … }`. Deliberately NOT called `message`: that is
+  // the getter above, reporting what the curtain is actually showing now. They
+  // answer different questions, and while both were called `message` the data
+  // property shadowed the getter — so `viewer.curtain.message` reported the
+  // default forever, including while the curtain displayed a load failure.
+  // A visitor is owed plain language, not the name of a module; resource names
+  // belong in the slow and failed states (and in ?dev=), where they act on it.
+  defaultMessage: 'Loading…',
   appearance(decl) {
     const m = typeof decl?.message === 'string' ? decl.message.trim() : '';
-    this.message = m || 'Loading…';
+    this.defaultMessage = m || 'Loading…';
     curtainEl.style.background = decl?.ground ? String(decl.ground) : '';
     curtainMark.style.backgroundImage = decl?.image ? `url("${decl.image}")` : '';
     // With an image of its own the default's inset ring would frame it oddly.
@@ -773,7 +780,7 @@ const loadMon = (() => {
     // Always something readable, from the first frame: a silent curtain is what
     // made a stalled load indistinguishable from a dead page.
     const label = live.keys().next().value;
-    curtain.say('loading', DEV && label ? `${curtain.message} (${label})` : curtain.message);
+    curtain.say('loading', DEV && label ? `${curtain.defaultMessage} (${label})` : curtain.defaultMessage);
   }
 
   // A phase's timing line. Off outside ?dev= — this is an author's tool, and a
@@ -1822,7 +1829,7 @@ function makeSequenceHost(comp) {
     // resource gets.
     waitingFor(name, again) {
       curtain.raise('loading');
-      curtain.say('loading', DEV ? `${curtain.message} (${name})` : curtain.message);
+      curtain.say('loading', DEV ? `${curtain.defaultMessage} (${name})` : curtain.defaultMessage);
       holdStatus(`Loading ${name}…`);
       return detail => {
         if (detail) {

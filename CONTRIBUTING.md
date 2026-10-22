@@ -10,7 +10,7 @@ agent-facing contracts live in [`AGENT.md`](AGENT.md).
 ## How the project is shaped right now
 
 - **The app is essentially one file.** All markup, CSS, and application logic
-  live in `index.html` (~1,100 lines), plus one module, `sequence.js`, that
+  live in `index.html` (~2,500 lines), plus one module, `sequence.js`, that
   `index.html` imports on demand when a pack ships a `sequence.yml`. There is
   no bundler. Sections are marked with `// --- name ---` banner comments.
 - **There is no build step.** No `package.json`, no lockfile, no CI config, no

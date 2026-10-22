@@ -205,7 +205,7 @@ Checklist for a flow:
 - **`hit: { padding: 0.25 }`** widens every icon's grab zone by that fraction of
   its projected radius. Raise it when the collected objects are small enough to
   be fiddly with a thumb; a press that hits nothing rotates nothing either way.
-- **`rest: { spring: true, dur: 0.5, ease: outBack(0.9) }`** is what happens when a
+- **`rest: { spring: true, dur: 0.8, ease: outBack(0.25) }`** is what happens when a
   dragged icon is let go. It is sequence-wide, and any step may carry its own
   `rest:` to override it. The RUNTIME owns it, so it works for an icon that
   exports no `IconController` at all; an icon that ships its own pointer
